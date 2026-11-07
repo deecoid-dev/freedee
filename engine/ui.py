@@ -245,7 +245,7 @@ class UI:
         self.text(
             target, self.mono_small,
             "F3  debug     F7  render mode     F11  fullscreen     "
-            "Esc  settings / release mouse",
+            "M  cat     Esc  settings / release mouse",
             (16, height - 16), HUD_TEXT, anchor="bottomleft",
         )
 

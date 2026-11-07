@@ -6,9 +6,11 @@ import math
 import sys
 import time
 from collections import deque
+from pathlib import Path
 
 import pygame
 
+from .canvas import UICanvas
 from .collision import CollisionWorld
 from .math3d import Vec3
 from .player import Player, TURN_SPEED as PLAYER_TURN_SPEED
@@ -18,6 +20,10 @@ from .ui import UI
 
 WINDOW_TITLE = "FreeDee engine"
 TARGET_FPS = 60
+
+CAT_SPRITE_PATH = (
+    Path(__file__).resolve().parent.parent / "uisprites" / "cat.jpg"
+)
 
 CAMERA_MOVE_SPEED = 3.0
 CAMERA_SPRINT_SPEED = 8.0
@@ -107,6 +113,7 @@ class Engine:
         self.walk_mode = True
         self.player_speed = DEFAULT_PLAYER_SPEED
         self.auto_bunnyhop = False
+        self.cat_visible = False
 
         self.toast_text = ""
         self.toast_timer = 0.0
@@ -132,6 +139,7 @@ class Engine:
 
         self.camera = Camera()
         self.ui = UI()
+        self.ui_canvas = UICanvas()
         self.resolutions = self._build_resolutions()
         self.resolution_index = 0
 
@@ -245,6 +253,7 @@ class Engine:
         # The old GL context is gone with the window; all GPU handles must be
         # rebuilt for the new one.
         self.renderer.reset()
+        self.ui_canvas.reset()
         if was_captured:
             self._capture_mouse()
 
@@ -275,6 +284,9 @@ class Engine:
         self._running = False
         if self.mouse_captured:
             self._release_mouse_capture()
+        canvas = getattr(self, "ui_canvas", None)
+        if canvas is not None:
+            canvas.close()
         self.renderer.close()
         if pygame.get_init():
             pygame.quit()
@@ -339,6 +351,12 @@ class Engine:
 
         if self.settings_open:
             self._handle_settings_key(key)
+            return
+
+        if key == pygame.K_m:
+            self.cat_visible = not self.cat_visible
+            self.toast_text = "CAT OVERLAY" if self.cat_visible else "CAT HIDDEN"
+            self.toast_timer = 1.6
             return
 
         name = _MOVEMENT_KEYS.get(key)
@@ -436,12 +454,70 @@ class Engine:
         self.renderer.render(
             self.scene, self.camera, width, height, self.time
         )
+        self._render_ui_canvas(width, height)
         surface = self._draw_overlays(width, height)
         self.renderer.draw_overlay(surface)
         pygame.display.flip()
 
         self._render_times.append((time.perf_counter() - started) * 1000.0)
         self.frame_ms = sum(self._render_times) / len(self._render_times)
+
+    # ------------------------------------------------------------------
+    # 2D UI canvas
+    # ------------------------------------------------------------------
+    def _render_ui_canvas(self, width: int, height: int) -> None:
+        canvas = self.ui_canvas
+        canvas.begin()
+        if self.cat_visible:
+            self._draw_cat_overlay(canvas, width, height)
+        canvas.render(width, height)
+
+    def _draw_cat_overlay(
+        self, canvas: UICanvas, width: int, height: int
+    ) -> None:
+        try:
+            source_width, source_height = canvas.image_size(CAT_SPRITE_PATH)
+        except (pygame.error, OSError):
+            canvas.panel(
+                width / 2 - 190, height / 2 - 34, 380, 68,
+                fill=(11, 17, 25, 235),
+                border=(255, 107, 107, 255),
+                border_width=2,
+            )
+            canvas.text(
+                "uisprites/cat.jpg not found",
+                (width / 2, height / 2),
+                self.ui.ui_bold, (255, 107, 107, 255), anchor="center",
+            )
+            return
+
+        max_size = min(560.0, width * 0.52, height * 0.66)
+        scale = min(max_size / source_width, max_size / source_height)
+        image_width = max(1, int(source_width * scale))
+        image_height = max(1, int(source_height * scale))
+
+        padding = 14
+        caption_height = 38
+        panel_width = image_width + padding * 2
+        panel_height = image_height + padding * 2 + caption_height
+        panel_x = (width - panel_width) / 2
+        panel_y = (height - panel_height) / 2
+
+        # Translucent backdrop, then a framed sprite and a text caption. This
+        # is the whole demo of the 2D canvas: rect + panel + sprite + text.
+        canvas.rect(0, 0, width, height, (2, 5, 10, 150))
+        canvas.panel(
+            panel_x, panel_y, panel_width, panel_height,
+            fill=(11, 17, 25, 238),
+            border=(111, 227, 255, 255),
+            border_width=2,
+        )
+        canvas.sprite(
+            CAT_SPRITE_PATH,
+            (panel_x + padding, panel_y + padding),
+            width=image_width,
+            height=image_height,
+        )
 
     # ------------------------------------------------------------------
     # Overlays

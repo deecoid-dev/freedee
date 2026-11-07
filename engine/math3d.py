@@ -164,6 +164,33 @@ def mat4_perspective(fov_y: float, aspect: float, near: float, far: float) -> Ma
     )
 
 
+def mat4_ortho(
+    left: float,
+    right: float,
+    bottom: float,
+    top: float,
+    near: float,
+    far: float,
+) -> Mat4:
+    """Orthographic projection, the matrix equivalent of old ``glOrtho``.
+
+    The engine uses an OpenGL 3.3 core context, where the fixed-function
+    ``glOrtho`` call no longer exists, so the same transform is passed to
+    the UI shader as a uniform.
+    """
+    if right == left or top == bottom or far == near:
+        return mat4_identity()
+    inv_width = 1.0 / (right - left)
+    inv_height = 1.0 / (top - bottom)
+    inv_depth = 1.0 / (far - near)
+    return (
+        2.0 * inv_width, 0.0, 0.0, -(right + left) * inv_width,
+        0.0, 2.0 * inv_height, 0.0, -(top + bottom) * inv_height,
+        0.0, 0.0, -2.0 * inv_depth, -(far + near) * inv_depth,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+
 def mat4_look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4:
     forward = (target - eye).normalized()
     side = forward.cross(up).normalized()
