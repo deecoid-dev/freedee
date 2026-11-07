@@ -17,11 +17,12 @@ python3 main.py
 If you are Windows user, you can just double-click on run.bat file.
 
 ## Hotkeys
-F3 - debug screen
-F7 - debug render modes
-F11 - fullscreen
-Esc - settings screen
-Tab - fly / walk mode
+- F3 - debug screen
+- F7 - debug render modes
+- F11 - fullscreen
+- Esc - settings screen
+- Tab - fly / walk mode
+- M - cat
 
 ## Was AI used?
 
