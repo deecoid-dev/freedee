@@ -1,4 +1,4 @@
-"""Quake-style character movement: acceleration, friction and bunny hopping."""
+"""Half-Life (GoldSrc) style character movement and bunny hopping."""
 
 from __future__ import annotations
 
@@ -11,17 +11,19 @@ PLAYER_RADIUS = 0.36
 PLAYER_HEIGHT = 1.78
 EYE_HEIGHT = 1.62
 
-# Tuned for a 1 unit == 1 metre room. The model is Quake III / Half-Life
-# flavoured: ground movement accelerates towards a wish speed and friction
-# slows it down; in the air there is no friction, so the player keeps momentum
-# and a weaker acceleration pushes them along the input direction. Critically,
-# the sideways component is *not* capped: holding A/D while turning the view
-# keeps adding lateral velocity, which is what makes strafing and
-# strafe-jumping work.
+# Tuned for a 1 unit == 1 metre room. Ground movement accelerates towards a
+# wish speed and friction slows it down. In the air there is no friction, so
+# the player keeps momentum; air acceleration follows Half-Life's
+# PM_AirAccelerate(), where the wish speed used for the projection test is
+# capped to 30/320 of the run speed. That cap is what makes strafe-jumping
+# controllable: forward speed is already above it, so only the lateral
+# component can still accelerate. Turning the view while holding A/D keeps
+# that component pointed across the velocity, so speed builds up smoothly.
 GRAVITY = 20.0
 JUMP_SPEED = 7.2
 GROUND_ACCELERATION = 12.0
-AIR_ACCELERATION = 2.5
+AIR_ACCELERATION = 10.0
+AIR_WISH_SPEED_RATIO = 30.0 / 320.0
 GROUND_FRICTION = 7.5
 STOP_SPEED = 2.0
 SPRINT_MULTIPLIER = 1.45
@@ -29,6 +31,8 @@ TERMINAL_VELOCITY = 50.0
 MAX_HORIZONTAL_SPEED = 32.0
 JUMP_BUFFER_TIME = 0.14
 STEP_HEIGHT = 0.34
+
+WORLD_UP = Vec3(0.0, 1.0, 0.0)
 
 MAX_PITCH = math.radians(89.0)
 TURN_SPEED = 2.2
@@ -67,11 +71,16 @@ class Player:
         )
 
     def forward(self) -> Vec3:
-        """Horizontal look direction (used for walking)."""
+        """Horizontal look direction, built from the raw yaw angle only."""
         return Vec3(math.sin(self.yaw), 0.0, -math.cos(self.yaw))
 
     def right(self) -> Vec3:
-        return Vec3(math.cos(self.yaw), 0.0, math.sin(self.yaw))
+        """Strafe direction, the cross product of forward and world up.
+
+        Keeping the basis orthogonal this way means A/D always stay exactly
+        perpendicular to the view, which is what makes air strafing crisp.
+        """
+        return self.forward().cross(WORLD_UP)
 
     def look_direction(self) -> Vec3:
         cos_pitch = math.cos(self.pitch)
@@ -178,15 +187,9 @@ class Player:
     def _wish_direction(self, keys: set[str]) -> Vec3:
         forward = self.forward()
         right = self.right()
-        wish = Vec3()
-        if "w" in keys:
-            wish += forward
-        if "s" in keys:
-            wish -= forward
-        if "d" in keys:
-            wish += right
-        if "a" in keys:
-            wish -= right
+        forward_input = float("w" in keys) - float("s" in keys)
+        side_input = float("d" in keys) - float("a" in keys)
+        wish = forward * forward_input + right * side_input
         return wish.normalized()
 
     def _apply_friction(self, delta: float) -> None:
@@ -223,19 +226,21 @@ class Player:
         acceleration: float,
         delta: float,
     ) -> None:
-        """Quake III air acceleration.
+        """Half-Life / GoldSrc ``PM_AirAccelerate``.
 
-        Speed is added along the input direction while the velocity projected
-        onto it is below the wish speed. There is deliberately no small
-        sideways cap here (the old code clamped this to 0.9 m/s): such a cap
-        stops adding lateral speed almost immediately, so A/D in the air only
-        produced a barely visible drift and the player felt like they were
-        flying straight. Rotating the view moves the wish direction away from
-        the velocity, so turning while strafing keeps pushing the player
-        sideways and builds speed for bunny hopping.
+        The velocity is projected onto the wish direction, but the wish
+        speed used for that test is capped (30 of 320 units in GoldSrc).
+        The full, uncapped wish speed is still used for the acceleration
+        amount. Because a running player's forward speed is already far
+        past the cap, adding W does nothing in the air: only the lateral
+        part of the wish direction can still push the velocity. Turning
+        the view while holding A/D keeps that lateral part across the
+        velocity, so every jump adds a little more speed instead of the
+        player drifting sideways as if on ice.
         """
+        wish_cap = self.speed * AIR_WISH_SPEED_RATIO
         current = self.velocity.x * wish_dir.x + self.velocity.z * wish_dir.z
-        add_speed = wish_speed - current
+        add_speed = min(wish_speed, wish_cap) - current
         if add_speed <= 0.0:
             return
         accel_speed = acceleration * wish_speed * delta
