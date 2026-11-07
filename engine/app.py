@@ -408,6 +408,8 @@ class Engine:
             self._step_player_speed(direction)
         elif row == "auto_bunnyhop":
             self._toggle_auto_bunnyhop()
+        elif row == "accent_color":
+            self._step_accent_color(direction)
 
     # ------------------------------------------------------------------
     # Per-frame update
@@ -509,7 +511,7 @@ class Engine:
         canvas.panel(
             panel_x, panel_y, panel_width, panel_height,
             fill=(11, 17, 25, 238),
-            border=(111, 227, 255, 255),
+            border=(*self.ui.accent, 255),
             border_width=2,
         )
         canvas.sprite(
@@ -542,6 +544,8 @@ class Engine:
                     "fullscreen": self.fullscreen,
                     "player_speed": self.player_speed,
                     "auto_bunnyhop": self.auto_bunnyhop,
+                    "accent_name": self.ui.accent_name,
+                    "accent_hex": self.ui.accent_hex,
                     "window": (self.windowed_width, self.windowed_height),
                     "screen": self._desktop_size(),
                 },
@@ -805,6 +809,11 @@ class Engine:
     def _toggle_auto_bunnyhop(self) -> None:
         self.auto_bunnyhop = not self.auto_bunnyhop
         self.player.auto_bhop = self.auto_bunnyhop
+
+    def _step_accent_color(self, direction: int) -> None:
+        self.ui.cycle_accent(direction)
+        self.toast_text = f"ACCENT: {self.ui.accent_name.upper()}"
+        self.toast_timer = 1.4
 
     def _resolution_text(self) -> str:
         width, height = self.resolutions[self.resolution_index]

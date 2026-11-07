@@ -11,10 +11,21 @@ import pygame
 
 PANEL_FILL = (11, 17, 25)
 PANEL_BORDER = (38, 55, 75)
-ACCENT = (111, 227, 255)
+DEFAULT_ACCENT = (111, 227, 255)
+#: Accent colours offered by the settings screen, in cycling order.
+ACCENT_PRESETS: tuple[tuple[str, tuple[int, int, int]], ...] = (
+    ("Cyan", (111, 227, 255)),
+    ("Mint", (121, 242, 178)),
+    ("Lime", (184, 242, 107)),
+    ("Amber", (255, 196, 92)),
+    ("Orange", (255, 138, 92)),
+    ("Red", (255, 107, 107)),
+    ("Magenta", (255, 114, 214)),
+    ("Violet", (181, 140, 255)),
+    ("Blue", (122, 162, 255)),
+)
 TEXT = (219, 232, 245)
 MUTED = (125, 145, 168)
-HIGHLIGHT = (16, 30, 44)
 DIM = (2, 5, 10)
 HUD_TEXT = (84, 104, 127)
 
@@ -41,6 +52,36 @@ class UI:
         self.title = _font("segoeui,arial,dejavusans", 26, True)
         self.toast = _font("segoeui,arial,dejavusans", 20, True)
         self._cache: dict[tuple, pygame.Surface] = {}
+        self.accent_index = 0
+        self.accent = DEFAULT_ACCENT
+
+    # ------------------------------------------------------------------
+    # Accent colour
+    # ------------------------------------------------------------------
+    @property
+    def accent_name(self) -> str:
+        return ACCENT_PRESETS[self.accent_index][0]
+
+    @property
+    def accent_hex(self) -> str:
+        return "#{:02X}{:02X}{:02X}".format(*self.accent)
+
+    def cycle_accent(self, direction: int) -> None:
+        self.accent_index = (
+            self.accent_index + direction
+        ) % len(ACCENT_PRESETS)
+        self.accent = ACCENT_PRESETS[self.accent_index][1]
+
+    def _highlight_color(self) -> tuple[int, int, int]:
+        """A dark version of the accent used behind the selected row."""
+        mix = 0.12
+        return tuple(
+            round(
+                PANEL_FILL[channel]
+                + (self.accent[channel] - PANEL_FILL[channel]) * mix
+            )
+            for channel in range(3)
+        )
 
     # ------------------------------------------------------------------
     # Text helpers
@@ -88,11 +129,11 @@ class UI:
         pygame.draw.rect(
             target, PANEL_BORDER, (x, y, width, height), 1
         )
-        pygame.draw.rect(target, ACCENT, (x, y, 3, height))
+        pygame.draw.rect(target, self.accent, (x, y, 3, height))
 
         self.text(
             target, self.mono_bold, "debug screen",
-            (x + pad, y + pad - 3), ACCENT,
+            (x + pad, y + pad - 3), self.accent,
         )
         self.text(
             target, self.mono_small, "F3",
@@ -119,6 +160,7 @@ class UI:
         "fullscreen",
         "player_speed",
         "auto_bunnyhop",
+        "accent_color",
         "back",
     )
 
@@ -132,7 +174,7 @@ class UI:
         pygame.draw.rect(target, (*DIM, 190), (0, 0, width, height))
 
         panel_w = min(560, width - 40)
-        panel_h = min(408, height - 40)
+        panel_h = min(452, height - 40)
         x0 = (width - panel_w) // 2
         y0 = (height - panel_h) // 2
         x1 = x0 + panel_w
@@ -140,7 +182,7 @@ class UI:
 
         pygame.draw.rect(target, PANEL_FILL, (x0, y0, panel_w, panel_h))
         pygame.draw.rect(target, PANEL_BORDER, (x0, y0, panel_w, panel_h), 1)
-        pygame.draw.rect(target, ACCENT, (x0, y0, panel_w, 3))
+        pygame.draw.rect(target, self.accent, (x0, y0, panel_w, 3))
 
         self.text(
             target, self.title, "SETTINGS", (x0 + 30, y0 + 18), TEXT
@@ -162,16 +204,17 @@ class UI:
         cursor = state["cursor"]
         rows_y = y0 + 92
         row_step = 46
+        highlight = self._highlight_color()
         for index, row in enumerate(self.ROWS):
             selected = index == cursor
             row_top = rows_y + index * row_step
             if selected:
                 pygame.draw.rect(
-                    target, HIGHLIGHT,
+                    target, highlight,
                     (x0 + 18, row_top - 6, panel_w - 36, 38),
                 )
                 pygame.draw.rect(
-                    target, ACCENT,
+                    target, self.accent,
                     (x0 + 18, row_top - 6, 3, 38),
                 )
 
@@ -181,11 +224,23 @@ class UI:
                 (x0 + 34, row_top),
                 TEXT if selected else (159, 178, 199),
             )
-            self.text(
+            value_rect = self.text(
                 target, self.ui_bold, value,
                 (x1 - 36, row_top + 1),
-                ACCENT if selected else TEXT, anchor="topright",
+                self.accent if selected else TEXT, anchor="topright",
             )
+            if row == "accent_color":
+                swatch = 13
+                swatch_x = value_rect.left - swatch - 9
+                swatch_y = value_rect.centery - swatch // 2
+                pygame.draw.rect(
+                    target, self.accent,
+                    (swatch_x, swatch_y, swatch, swatch),
+                )
+                pygame.draw.rect(
+                    target, PANEL_BORDER,
+                    (swatch_x, swatch_y, swatch, swatch), 1,
+                )
 
         pygame.draw.line(
             target, (27, 42, 59),
@@ -216,6 +271,13 @@ class UI:
                 "Auto bunnyhop",
                 "On" if state["auto_bunnyhop"] else "Off",
             )
+        if row == "accent_color":
+            name = state.get("accent_name", "Cyan")
+            hex_code = state.get("accent_hex", "")
+            text = f"{name}  {hex_code}" if hex_code else name
+            if selected:
+                return "Accent color", f"←   {text}   →"
+            return "Accent color", text
         return "Back", "Esc"
 
     # ------------------------------------------------------------------
@@ -238,6 +300,9 @@ class UI:
                 "WASD move    Q/E up-down    Mouse look    Wheel move    "
                 "Shift boost    C reset camera    Tab walk mode"
             )
+        pygame.draw.rect(
+            target, self.accent, (16, height - 54, 46, 2)
+        )
         self.text(
             target, self.mono_small, move_line,
             (16, height - 36), HUD_TEXT, anchor="bottomleft",
@@ -264,13 +329,13 @@ class UI:
         )
         self.text(
             target, self.mono_bold, text,
-            (width / 2, y0 + 16), ACCENT, anchor="center",
+            (width / 2, y0 + 16), self.accent, anchor="center",
         )
 
     def draw_toast(
         self, target: pygame.Surface, width: int, text: str
     ) -> None:
-        rendered = self._text_surface(self.toast, text, ACCENT)
+        rendered = self._text_surface(self.toast, text, self.accent)
         panel_width = max(300, rendered.get_width() + 80)
         panel_height = 58
         x0 = (width - panel_width) / 2
@@ -283,10 +348,11 @@ class UI:
             (x0, y0, panel_width, panel_height), 1,
         )
         pygame.draw.rect(
-            target, ACCENT, (x0, y0 + panel_height - 3, panel_width, 3)
+            target, self.accent,
+            (x0, y0 + panel_height - 3, panel_width, 3),
         )
         self.text(
             target, self.toast, text,
-            (width / 2, y0 + panel_height / 2 - 1), ACCENT,
+            (width / 2, y0 + panel_height / 2 - 1), self.accent,
             anchor="center",
         )
