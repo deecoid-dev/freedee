@@ -12,7 +12,7 @@ python -m pip install -r requirements.txt
 ```
 After installing dependencies, run engine in your terminal:
 ```bash
-python -m pip install -r requirements.txt
+python3 main.py
 ```
 If you are Windows user, you can just double-click on run.bat file.
 
