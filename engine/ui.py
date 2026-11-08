@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pygame
 
+from .crosshair import Crosshair
+
 PANEL_FILL = (11, 17, 25)
 PANEL_BORDER = (38, 55, 75)
 DEFAULT_ACCENT = (111, 227, 255)
@@ -160,6 +162,7 @@ class UI:
         "fullscreen",
         "player_speed",
         "auto_bunnyhop",
+        "crosshair",
         "accent_color",
         "back",
     )
@@ -174,7 +177,7 @@ class UI:
         pygame.draw.rect(target, (*DIM, 190), (0, 0, width, height))
 
         panel_w = min(560, width - 40)
-        panel_h = min(452, height - 40)
+        panel_h = min(500, height - 40)
         x0 = (width - panel_w) // 2
         y0 = (height - panel_h) // 2
         x1 = x0 + panel_w
@@ -248,7 +251,8 @@ class UI:
         )
         self.text(
             target, self.mono_small,
-            "↑ ↓  navigate     ← →  change     Enter  select     Esc  close",
+            "↑ ↓  navigate     ← →  change     Enter  select / open     "
+            "Esc  close",
             ((x0 + x1) / 2, y1 - 36), MUTED, anchor="center",
         )
 
@@ -271,6 +275,11 @@ class UI:
                 "Auto bunnyhop",
                 "On" if state["auto_bunnyhop"] else "Off",
             )
+        if row == "crosshair":
+            status = "On" if state.get("crosshair_enabled", True) else "Off"
+            if selected:
+                return "Crosshair", f"←   {status}   →"
+            return "Crosshair", f"{status}  >"
         if row == "accent_color":
             name = state.get("accent_name", "Cyan")
             hex_code = state.get("accent_hex", "")
@@ -279,6 +288,242 @@ class UI:
                 return "Accent color", f"←   {text}   →"
             return "Accent color", text
         return "Back", "Esc"
+
+    # ------------------------------------------------------------------
+    # Crosshair editor and in-game crosshair
+    # ------------------------------------------------------------------
+    def draw_crosshair_editor(
+        self,
+        target: pygame.Surface,
+        width: int,
+        height: int,
+        crosshair: Crosshair,
+        cursor: int,
+    ) -> None:
+        pygame.draw.rect(target, (*DIM, 190), (0, 0, width, height))
+
+        panel_w = min(700, width - 40)
+        panel_h = min(560, height - 40)
+        x0 = (width - panel_w) // 2
+        y0 = (height - panel_h) // 2
+        x1 = x0 + panel_w
+        y1 = y0 + panel_h
+
+        pygame.draw.rect(target, PANEL_FILL, (x0, y0, panel_w, panel_h))
+        pygame.draw.rect(target, PANEL_BORDER, (x0, y0, panel_w, panel_h), 1)
+        pygame.draw.rect(target, self.accent, (x0, y0, panel_w, 3))
+
+        self.text(target, self.title, "CROSSHAIR", (x0 + 30, y0 + 18), TEXT)
+        self.text(
+            target, self.mono_small, "ESC  BACK",
+            (x1 - 30, y0 + 27), MUTED, anchor="topright",
+        )
+        self.text(
+            target, self.mono_small, "LIVE IN-GAME PREVIEW",
+            (x0 + 30, y0 + 54), MUTED,
+        )
+        pygame.draw.line(
+            target, (27, 42, 59), (x0 + 30, y0 + 76), (x1 - 30, y0 + 76)
+        )
+
+        controls_width = min(446, panel_w - 240)
+        controls_x1 = x0 + controls_width
+        rows_y = y0 + 92
+        row_step = 34
+        highlight = self._highlight_color()
+
+        for index, row in enumerate(Crosshair.ROWS):
+            selected = index == cursor
+            row_top = rows_y + index * row_step
+            if selected:
+                pygame.draw.rect(
+                    target, highlight,
+                    (x0 + 18, row_top - 5, controls_width - 36, 28),
+                )
+                pygame.draw.rect(
+                    target, self.accent,
+                    (x0 + 18, row_top - 5, 3, 28),
+                )
+
+            label, value = self._crosshair_row_text(row, crosshair, selected)
+            self.text(
+                target, self.ui, label,
+                (x0 + 34, row_top),
+                TEXT if selected else (159, 178, 199),
+            )
+            value_rect = self.text(
+                target, self.ui_bold, value,
+                (controls_x1 - 18, row_top + 1),
+                self.accent if selected else TEXT, anchor="topright",
+            )
+            if row == "color":
+                swatch = 13
+                swatch_x = value_rect.left - swatch - 9
+                swatch_y = value_rect.centery - swatch // 2
+                pygame.draw.rect(
+                    target, (*self.crosshair_color(crosshair), 255),
+                    (swatch_x, swatch_y, swatch, swatch),
+                )
+                pygame.draw.rect(
+                    target, PANEL_BORDER,
+                    (swatch_x, swatch_y, swatch, swatch), 1,
+                )
+
+        # Live preview: the crosshair is drawn at 1:1 in a framed box so the
+        # editor shows exactly what the player sees in game.
+        area_x = controls_x1 + 18
+        area_width = (x1 - 24) - area_x
+        box_size = min(190, max(96, area_width - 24))
+        preview_x = area_x + (area_width - box_size) // 2
+        preview_y = y0 + 100
+        center = (
+            preview_x + box_size / 2.0,
+            preview_y + box_size / 2.0,
+        )
+
+        self.text(
+            target, self.mono_small, "PREVIEW",
+            (preview_x, preview_y - 8), MUTED, anchor="bottomleft",
+        )
+        pygame.draw.rect(
+            target, (20, 28, 38),
+            (preview_x, preview_y, box_size, box_size),
+        )
+        pygame.draw.rect(
+            target, PANEL_BORDER,
+            (preview_x, preview_y, box_size, box_size), 1,
+        )
+        pygame.draw.line(
+            target, (33, 46, 61),
+            (center[0], preview_y + 8),
+            (center[0], preview_y + box_size - 8),
+        )
+        pygame.draw.line(
+            target, (33, 46, 61),
+            (preview_x + 8, center[1]),
+            (preview_x + box_size - 8, center[1]),
+        )
+        if crosshair.enabled:
+            self._draw_crosshair_shape(target, center, crosshair)
+        else:
+            self.text(
+                target, self.ui_bold, "OFF",
+                center, MUTED, anchor="center",
+            )
+
+        color = self.crosshair_color(crosshair)
+        info_y = preview_y + box_size + 14
+        self.text(
+            target, self.mono_small, crosshair.color_name.upper(),
+            (preview_x, info_y), self.accent,
+        )
+        self.text(
+            target, self.mono_small,
+            "#{:02X}{:02X}{:02X}".format(*color),
+            (preview_x + box_size, info_y), MUTED, anchor="topright",
+        )
+        self.text(
+            target, self.mono_small,
+            f"{crosshair.size}px arms   {crosshair.gap}px gap",
+            (preview_x, info_y + 18), MUTED,
+        )
+        self.text(
+            target, self.mono_small,
+            f"{crosshair.thickness}px thick   {crosshair.opacity}% alpha",
+            (preview_x, info_y + 36), MUTED,
+        )
+
+        pygame.draw.line(
+            target, (27, 42, 59),
+            (x0 + 30, y1 - 58), (x1 - 30, y1 - 58),
+        )
+        self.text(
+            target, self.mono_small,
+            "↑ ↓  navigate     ← →  change     Enter  toggle     Esc  back",
+            ((x0 + x1) / 2, y1 - 36), MUTED, anchor="center",
+        )
+
+    @staticmethod
+    def _crosshair_arrows(value: str, selected: bool) -> str:
+        return f"←   {value}   →" if selected else value
+
+    def _crosshair_row_text(
+        self, row: str, crosshair: Crosshair, selected: bool
+    ) -> tuple[str, str]:
+        if row == "enabled":
+            return "Enabled", "On" if crosshair.enabled else "Off"
+        if row == "color":
+            value = self._crosshair_arrows(crosshair.color_name, selected)
+            return "Color", value
+        if row == "size":
+            return "Size", self._crosshair_arrows(
+                f"{crosshair.size} px", selected
+            )
+        if row == "gap":
+            return "Gap", self._crosshair_arrows(
+                f"{crosshair.gap} px", selected
+            )
+        if row == "thickness":
+            return "Thickness", self._crosshair_arrows(
+                f"{crosshair.thickness} px", selected
+            )
+        if row == "dot":
+            return "Dot", "On" if crosshair.dot else "Off"
+        if row == "dot_size":
+            return "Dot size", self._crosshair_arrows(
+                f"{crosshair.dot_size} px", selected
+            )
+        if row == "outline":
+            return "Outline", "On" if crosshair.outline else "Off"
+        if row == "outline_thickness":
+            return "Outline width", self._crosshair_arrows(
+                f"{crosshair.outline_thickness} px", selected
+            )
+        if row == "opacity":
+            return "Opacity", self._crosshair_arrows(
+                f"{crosshair.opacity} %", selected
+            )
+        return "Back", "Esc"
+
+    def crosshair_color(self, crosshair: Crosshair) -> tuple[int, int, int]:
+        """Resolve the crosshair colour, following the accent when selected."""
+        color = crosshair.color
+        return color if color is not None else self.accent
+
+    def draw_crosshair(
+        self,
+        target: pygame.Surface,
+        width: int,
+        height: int,
+        crosshair: Crosshair,
+    ) -> None:
+        if not crosshair.enabled:
+            return
+        self._draw_crosshair_shape(
+            target, (width / 2.0, height / 2.0), crosshair
+        )
+
+    def _draw_crosshair_shape(
+        self,
+        target: pygame.Surface,
+        center: tuple[float, float],
+        crosshair: Crosshair,
+    ) -> None:
+        alpha = max(0, min(255, round(crosshair.opacity * 2.55)))
+        rects = crosshair.rects(center)
+        if crosshair.outline and crosshair.outline_thickness > 0:
+            outline = max(1, int(crosshair.outline_thickness))
+            for x, y, w, h in rects:
+                pygame.draw.rect(
+                    target, (0, 0, 0, alpha),
+                    (
+                        x - outline, y - outline,
+                        w + outline * 2, h + outline * 2,
+                    ),
+                )
+        color = (*self.crosshair_color(crosshair), alpha)
+        for rect in rects:
+            pygame.draw.rect(target, color, rect)
 
     # ------------------------------------------------------------------
     # HUD and notifications

@@ -12,6 +12,7 @@ import pygame
 
 from .canvas import UICanvas
 from .collision import CollisionWorld
+from .crosshair import Crosshair
 from .math3d import Vec3
 from .player import Player, TURN_SPEED as PLAYER_TURN_SPEED
 from .renderer import GLRenderer, RenderMode
@@ -109,11 +110,14 @@ class Engine:
         self.render_mode = RenderMode.SHADED
         self.debug_visible = False
         self.settings_open = False
+        self.settings_page = "main"
         self.settings_cursor = 0
+        self.crosshair_cursor = 0
         self.walk_mode = True
         self.player_speed = DEFAULT_PLAYER_SPEED
         self.auto_bunnyhop = False
         self.cat_visible = False
+        self.crosshair = Crosshair()
 
         self.toast_text = ""
         self.toast_timer = 0.0
@@ -344,7 +348,10 @@ class Engine:
             return
         if key == pygame.K_ESCAPE:
             if self.settings_open:
-                self._close_settings()
+                if self.settings_page == "crosshair":
+                    self._close_crosshair_editor()
+                else:
+                    self._close_settings()
             else:
                 self._open_settings()
             return
@@ -375,6 +382,10 @@ class Engine:
         self._keys.add(name)
 
     def _handle_settings_key(self, key: int) -> None:
+        if self.settings_page == "crosshair":
+            self._handle_crosshair_key(key)
+            return
+
         rows = UI.ROWS
         if key in (pygame.K_UP, pygame.K_w):
             self.settings_cursor = (self.settings_cursor - 1) % len(rows)
@@ -396,8 +407,52 @@ class Engine:
         if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             if row == "back":
                 self._close_settings()
+            elif row == "crosshair":
+                self._open_crosshair_editor()
             else:
                 self._change_setting(row, 1)
+
+    def _handle_crosshair_key(self, key: int) -> None:
+        rows = Crosshair.ROWS
+        if key in (pygame.K_UP, pygame.K_w):
+            self.crosshair_cursor = (
+                self.crosshair_cursor - 1
+            ) % len(rows)
+            return
+        if key in (pygame.K_DOWN, pygame.K_s):
+            self.crosshair_cursor = (
+                self.crosshair_cursor + 1
+            ) % len(rows)
+            return
+
+        direction = 0
+        if key in (pygame.K_LEFT, pygame.K_a):
+            direction = -1
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            direction = 1
+
+        row = rows[self.crosshair_cursor]
+        if direction:
+            self._change_crosshair(row, direction)
+            return
+        if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+            if row == "back":
+                self._close_crosshair_editor()
+            else:
+                self._change_crosshair(row, 1)
+
+    def _change_crosshair(self, row: str, direction: int) -> None:
+        if row == "back":
+            return
+        self.crosshair.step(row, direction)
+
+    def _open_crosshair_editor(self) -> None:
+        self.settings_page = "crosshair"
+        self.crosshair_cursor = 0
+
+    def _close_crosshair_editor(self) -> None:
+        self.settings_page = "main"
+        self.settings_cursor = UI.ROWS.index("crosshair")
 
     def _change_setting(self, row: str, direction: int) -> None:
         if row == "resolution":
@@ -408,6 +463,8 @@ class Engine:
             self._step_player_speed(direction)
         elif row == "auto_bunnyhop":
             self._toggle_auto_bunnyhop()
+        elif row == "crosshair":
+            self._toggle_crosshair()
         elif row == "accent_color":
             self._step_accent_color(direction)
 
@@ -534,22 +591,32 @@ class Engine:
         surface.fill((0, 0, 0, 0))
 
         if self.settings_open:
-            self.ui.draw_settings(
-                surface,
-                width,
-                height,
-                {
-                    "cursor": self.settings_cursor,
-                    "resolution": self._resolution_text(),
-                    "fullscreen": self.fullscreen,
-                    "player_speed": self.player_speed,
-                    "auto_bunnyhop": self.auto_bunnyhop,
-                    "accent_name": self.ui.accent_name,
-                    "accent_hex": self.ui.accent_hex,
-                    "window": (self.windowed_width, self.windowed_height),
-                    "screen": self._desktop_size(),
-                },
-            )
+            if self.settings_page == "crosshair":
+                self.ui.draw_crosshair_editor(
+                    surface,
+                    width,
+                    height,
+                    self.crosshair,
+                    self.crosshair_cursor,
+                )
+            else:
+                self.ui.draw_settings(
+                    surface,
+                    width,
+                    height,
+                    {
+                        "cursor": self.settings_cursor,
+                        "resolution": self._resolution_text(),
+                        "fullscreen": self.fullscreen,
+                        "player_speed": self.player_speed,
+                        "auto_bunnyhop": self.auto_bunnyhop,
+                        "crosshair_enabled": self.crosshair.enabled,
+                        "accent_name": self.ui.accent_name,
+                        "accent_hex": self.ui.accent_hex,
+                        "window": (self.windowed_width, self.windowed_height),
+                        "screen": self._desktop_size(),
+                    },
+                )
 
         if self.debug_visible and not self.settings_open:
             self.ui.draw_debug(surface, self._debug_rows(width, height))
@@ -566,6 +633,10 @@ class Engine:
 
         if not self.settings_open:
             self.ui.draw_hud(surface, width, height, self.walk_mode)
+            if not self.cat_visible:
+                self.ui.draw_crosshair(
+                    surface, width, height, self.crosshair
+                )
 
         return surface
 
@@ -676,13 +747,16 @@ class Engine:
 
     def _open_settings(self) -> None:
         self.settings_open = True
+        self.settings_page = "main"
         self.settings_cursor = 0
+        self.crosshair_cursor = 0
         self._keys.clear()
         self._release_mouse_capture()
         self.player.jump_buffer = 0.0
 
     def _close_settings(self) -> None:
         self.settings_open = False
+        self.settings_page = "main"
         self._keys.clear()
         self._capture_mouse()
 
@@ -809,6 +883,13 @@ class Engine:
     def _toggle_auto_bunnyhop(self) -> None:
         self.auto_bunnyhop = not self.auto_bunnyhop
         self.player.auto_bhop = self.auto_bunnyhop
+
+    def _toggle_crosshair(self) -> None:
+        self.crosshair.enabled = not self.crosshair.enabled
+        self.toast_text = (
+            "CROSSHAIR ON" if self.crosshair.enabled else "CROSSHAIR OFF"
+        )
+        self.toast_timer = 1.2
 
     def _step_accent_color(self, direction: int) -> None:
         self.ui.cycle_accent(direction)
