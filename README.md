@@ -6,19 +6,23 @@ Feel free to use it however you like.
 
 ## Installing and launching
 
-Just clone this repository, then run in your terminal:
+Clone this repository, then make sure you have installed dependencies
 ```bash
 python -m pip install -r requirements.txt
-python main.py
 ```
-Or, if you are Windows user, double-click on "run.bat" file.
+After installing dependencies, run engine in your terminal:
+```bash
+python3 main.py
+```
+If you are Windows user, you can just double-click on run.bat file.
 
 ## Hotkeys
-F3 - debug screen
-F7 - debug render modes
-F11 - fullscreen
-Esc - settings screen
-Tab - fly / walk mode
+- F3 - debug screen
+- F7 - debug render modes
+- F11 - fullscreen
+- Esc - settings screen
+- Tab - fly / walk mode
+- M - cat
 
 ## Was AI used?
 
