@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 from .collision import AABB
 from .math3d import (
@@ -16,6 +17,9 @@ from .math3d import (
     mat4_translation,
 )
 from .mesh import Mesh
+
+if TYPE_CHECKING:
+    from .materials import Material
 
 
 class Camera:
@@ -80,6 +84,8 @@ class Object3D:
         *,
         hue: float | None = None,
         saturation: float = 0.85,
+        material: "Material | None" = None,
+        uv_scale: float | None = None,
     ) -> None:
         self.mesh = mesh
         self.position = position or Vec3()
@@ -88,6 +94,14 @@ class Object3D:
         #: A fixed hue turns off the animated iridescent palette.
         self.hue = hue
         self.saturation = saturation
+        #: When set, the renderer samples this material instead of the hue
+        #: gradient. Objects without a material keep the old look.
+        self.material = material
+        self.uv_scale = (
+            uv_scale
+            if uv_scale is not None
+            else (material.uv_scale if material is not None else 1.0)
+        )
 
     def model_matrix(self) -> Mat4:
         translate = mat4_translation(self.position.x, self.position.y, self.position.z)

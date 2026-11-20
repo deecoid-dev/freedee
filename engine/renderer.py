@@ -23,6 +23,7 @@ logging.getLogger("OpenGL.plugins").setLevel(logging.ERROR)
 from OpenGL import GL
 
 from .math3d import Mat4, mat4_look_at, mat4_mul, mat4_perspective
+from .materials import Material
 from .scene import Camera, Object3D, Scene
 
 BACKGROUND = (0.027, 0.039, 0.063)
@@ -81,6 +82,9 @@ uniform float u_hue;
 uniform float u_saturation;
 uniform float u_iridescent;
 uniform float u_triangle_count;
+uniform sampler2D u_texture;
+uniform int u_use_texture;
+uniform float u_uv_scale;
 
 out vec4 frag_color;
 
@@ -89,32 +93,52 @@ vec3 hsv_to_rgb(vec3 c) {
     return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
 }
 
+// Box projection: each face samples the texture on the two object-space axes
+// that are most perpendicular to its normal, so the same material tiles
+// correctly across boxes of any size without per-vertex UVs.
+vec2 box_uv(vec3 position, vec3 normal) {
+    vec3 n = abs(normal);
+    if (n.x >= n.y && n.x >= n.z) {
+        return vec2(position.z, position.y);
+    }
+    if (n.y >= n.z) {
+        return vec2(position.x, position.z);
+    }
+    return vec2(position.x, position.y);
+}
+
 void main() {
     vec3 normal = normalize(v_normal);
     float diffuse = max(dot(normal, normalize(u_light)), 0.0);
     vec3 color;
 
     if (u_mode == 0) {
-        float hue;
-        float saturation;
-        float value;
-        if (u_iridescent > 0.5) {
-            vec3 n = v_local_normal;
-            vec3 p = v_local_position;
-            hue = 0.5 + u_time * 0.10
-                + 0.10 * n.x + 0.16 * n.y + 0.22 * n.z
-                + 0.055 * p.x + 0.045 * p.y + 0.055 * p.z;
-            saturation = 0.85;
-            value = 0.38 + 0.62 * diffuse;
+        if (u_use_texture == 1) {
+            vec2 uv = box_uv(v_local_position, v_local_normal) * u_uv_scale;
+            vec3 base = texture(u_texture, uv).rgb;
+            color = base * (0.38 + 0.68 * diffuse);
         } else {
-            hue = u_hue
-                + 0.022 * v_local_normal.x
-                + 0.014 * v_local_normal.z
-                + 0.012 * v_local_position.y;
-            saturation = u_saturation;
-            value = 0.32 + 0.58 * diffuse;
+            float hue;
+            float saturation;
+            float value;
+            if (u_iridescent > 0.5) {
+                vec3 n = v_local_normal;
+                vec3 p = v_local_position;
+                hue = 0.5 + u_time * 0.10
+                    + 0.10 * n.x + 0.16 * n.y + 0.22 * n.z
+                    + 0.055 * p.x + 0.045 * p.y + 0.055 * p.z;
+                saturation = 0.85;
+                value = 0.38 + 0.62 * diffuse;
+            } else {
+                hue = u_hue
+                    + 0.022 * v_local_normal.x
+                    + 0.014 * v_local_normal.z
+                    + 0.012 * v_local_position.y;
+                saturation = u_saturation;
+                value = 0.32 + 0.58 * diffuse;
+            }
+            color = hsv_to_rgb(vec3(fract(hue), saturation, value));
         }
-        color = hsv_to_rgb(vec3(fract(hue), saturation, value));
     } else if (u_mode == 2) {
         float hue = fract(
             v_triangle / max(u_triangle_count, 1.0) + u_time * 0.10 + 0.02
@@ -204,6 +228,7 @@ class GLRenderer:
         self._line_uniforms: dict[str, int] = {}
         self._overlay_uniforms: dict[str, int] = {}
         self._mesh_cache: dict[int, dict] = {}
+        self._material_textures: dict[int, int] = {}
         self._overlay = {
             "texture": 0,
             "vao": 0,
@@ -219,6 +244,7 @@ class GLRenderer:
         """Forget GPU handles after the window (and its context) is rebuilt."""
         self._ready = False
         self._mesh_cache.clear()
+        self._material_textures.clear()
         self._overlay = {"texture": 0, "vao": 0, "vbo": 0, "size": (0, 0)}
         self._program = 0
         self._line_program = 0
@@ -234,6 +260,9 @@ class GLRenderer:
                 if entry["edge_vao"]:
                     GL.glDeleteVertexArrays(1, [entry["edge_vao"]])
                     GL.glDeleteBuffers(1, [entry["edge_vbo"]])
+            for texture in self._material_textures.values():
+                GL.glDeleteTextures([texture])
+            self._material_textures.clear()
             GL.glDeleteProgram(self._program)
             GL.glDeleteProgram(self._line_program)
             GL.glDeleteProgram(self._overlay_program)
@@ -261,7 +290,8 @@ class GLRenderer:
             for name in (
                 "u_model", "u_view_projection", "u_normal_matrix",
                 "u_mode", "u_time", "u_light", "u_hue", "u_saturation",
-                "u_iridescent", "u_triangle_count",
+                "u_iridescent", "u_triangle_count", "u_texture",
+                "u_use_texture", "u_uv_scale",
             )
         }
         self._line_uniforms = {
@@ -401,6 +431,47 @@ class GLRenderer:
         self._mesh_cache[key] = entry
         return entry
 
+    def _material_texture(self, material: Material) -> int:
+        """Upload a material surface and cache the OpenGL texture."""
+        key = id(material)
+        texture = self._material_textures.get(key)
+        if texture is not None:
+            return texture
+
+        surface = material.surface
+        width, height = surface.get_size()
+        to_bytes = getattr(pygame.image, "tobytes", None)
+        if to_bytes is not None:
+            data = to_bytes(surface, "RGBA", False)
+        else:  # pragma: no cover - older pygame
+            data = pygame.image.tostring(surface, "RGBA", False)
+
+        texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+        GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER,
+            GL.GL_LINEAR_MIPMAP_LINEAR,
+        )
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR
+        )
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT
+        )
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT
+        )
+        GL.glTexImage2D(
+            GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, width, height, 0,
+            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data,
+        )
+        GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+
+        self._material_textures[key] = texture
+        return texture
+
     # ------------------------------------------------------------------
     # Public rendering
     # ------------------------------------------------------------------
@@ -459,6 +530,7 @@ class GLRenderer:
         GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
         GL.glPolygonOffset(1.0, 1.0)
         GL.glUseProgram(self._program)
+        GL.glUniform1i(self._uniforms["u_texture"], 0)
         self._set_uniform_matrix(
             self._uniforms["u_view_projection"], view_projection
         )
@@ -518,9 +590,21 @@ class GLRenderer:
             float(max(1, entry["triangle_count"])),
         )
 
+        material = obj.material
+        if material is not None:
+            texture = self._material_texture(material)
+            GL.glActiveTexture(GL.GL_TEXTURE0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+            GL.glUniform1i(self._uniforms["u_use_texture"], 1)
+            GL.glUniform1f(self._uniforms["u_uv_scale"], obj.uv_scale)
+        else:
+            GL.glUniform1i(self._uniforms["u_use_texture"], 0)
+
         GL.glBindVertexArray(entry["vao"])
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, entry["vertex_count"])
         GL.glBindVertexArray(0)
+        if material is not None:
+            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
         self.stats["drawn_tris"] += entry["triangle_count"]
         self.stats["draw_calls"] += 1
 
