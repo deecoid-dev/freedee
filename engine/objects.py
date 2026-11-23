@@ -45,6 +45,10 @@ class TexturedObject(Object3D):
         )
         self.size = size
 
+    def collider(self) -> AABB:
+        """Axis-aligned collision box for the current position."""
+        return AABB.from_center_size(self.position, self.size)
+
     def place(
         self, scene: Scene, x: float, z: float = 0.0
     ) -> "TexturedObject":
@@ -55,7 +59,7 @@ class TexturedObject(Object3D):
             y = -self.size.y * 0.5
         self.position = Vec3(x, y, z)
         scene.add(self)
-        scene.add_collider(AABB.from_center_size(self.position, self.size))
+        scene.add_collider(self.collider())
         return self
 
     @classmethod

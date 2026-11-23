@@ -20,6 +20,7 @@ in texture repetitions per metre.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 from dataclasses import dataclass
@@ -29,6 +30,9 @@ import pygame
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 """Folder scanned for user supplied object textures."""
+
+MAP_TEXTURES_DIR = Path(__file__).resolve().parent / "maps" / "textures"
+"""Folder scanned for textures referenced by ``.map`` files."""
 
 TEXTURE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tga")
 TEXTURE_SIZE = 256
@@ -395,6 +399,132 @@ _GENERATORS = {
 }
 
 _materials: dict[str, Material] = {}
+_map_materials: dict[str, Material] = {}
+
+#: Generated map textures use a 64 px tile, the classic Quake texture size.
+MAP_FALLBACK_TEXTURE_SIZE = 64
+
+
+def _make_map_texture(name: str) -> pygame.Surface:
+    """Deterministic checker tile for a texture that has no asset file."""
+    digest = hashlib.md5(name.lower().encode("utf-8")).digest()
+    base = (
+        58 + digest[0] % 128,
+        58 + digest[1] % 128,
+        58 + digest[2] % 128,
+    )
+    surface = pygame.Surface(
+        (MAP_FALLBACK_TEXTURE_SIZE, MAP_FALLBACK_TEXTURE_SIZE)
+    )
+    surface.fill(_shade(base, -18))
+    half = MAP_FALLBACK_TEXTURE_SIZE // 2
+    for row in range(2):
+        for column in range(2):
+            color = base if (row + column) % 2 == 0 else _shade(base, 20)
+            pygame.draw.rect(
+                surface,
+                color,
+                (column * half + 1, row * half + 1, half - 2, half - 2),
+            )
+    pygame.draw.rect(
+        surface,
+        _shade(base, -42),
+        (0, 0, MAP_FALLBACK_TEXTURE_SIZE, MAP_FALLBACK_TEXTURE_SIZE),
+        2,
+    )
+    for _ in range(18):
+        x = digest[3] * 7 % MAP_FALLBACK_TEXTURE_SIZE
+        y = digest[4] * 11 % MAP_FALLBACK_TEXTURE_SIZE
+        pygame.draw.circle(
+            surface,
+            _shade(base, digest[5] % 31 - 15),
+            (x, y),
+            1,
+        )
+    return surface
+
+
+def _normalized_map_name(name: str) -> str:
+    cleaned = name.strip().replace("\\", "/")
+    parts = [
+        part for part in cleaned.split("/")
+        if part not in ("", ".", "..")
+    ]
+    return "/".join(parts)
+
+
+def _find_map_texture(name: str) -> Path | None:
+    """Locate a map texture by its editor name in maps/textures or assets."""
+    cleaned = _normalized_map_name(name)
+    if not cleaned:
+        return None
+    without_extension = cleaned
+    lowered = cleaned.lower()
+    for extension in TEXTURE_EXTENSIONS:
+        if lowered.endswith(extension):
+            without_extension = cleaned[: -len(extension)]
+            break
+    base_name = without_extension.rsplit("/", 1)[-1]
+    try:
+        relative = Path(without_extension)
+    except (OSError, ValueError):
+        relative = Path(base_name)
+
+    roots = (MAP_TEXTURES_DIR, ASSETS_DIR)
+    candidates: list[Path] = []
+    for root in roots:
+        candidates.append(root / relative)
+        candidates.append(root / base_name)
+        if cleaned != without_extension:
+            candidates.append(root / cleaned)
+    for candidate in candidates:
+        if candidate.suffix.lower() in TEXTURE_EXTENSIONS and candidate.is_file():
+            return candidate
+        for extension in TEXTURE_EXTENSIONS:
+            path = candidate.with_name(candidate.name + extension)
+            if path.is_file():
+                return path
+    return None
+
+
+def get_map_material(name: str) -> Material:
+    """Resolve a texture name from a ``.map`` file.
+
+    Files in ``engine/maps/textures`` win, then files in ``engine/assets``.
+    Built-in procedural materials are reused when the editor name matches one
+    of them (``concrete``, ``crate``, ``floor_tiles`` ...).  Every other name
+    receives a deterministic checker texture, so an unknown WAD texture never
+    prevents a map from loading.
+    """
+    key = name.strip() or "missing"
+    cached = _map_materials.get(key)
+    if cached is not None:
+        return cached
+
+    normalized = _normalized_map_name(key)
+    base_name = normalized.rsplit("/", 1)[-1]
+    stem = Path(base_name).stem
+
+    path = _find_map_texture(key)
+    surface = _load_asset(path) if path is not None else None
+    if surface is None:
+        if stem in _GENERATORS:
+            material = get_material(stem)
+            _map_materials[key] = material
+            return material
+        surface = _make_map_texture(normalized or key)
+        if path is None:
+            print(
+                f"[map] texture {key!r} was not found; "
+                "using a generated placeholder"
+            )
+    material = Material(
+        name=normalized or key,
+        surface=surface,
+        uv_scale=1.0,
+    )
+    _map_materials[key] = material
+    return material
 
 
 def _find_asset(name: str) -> Path | None:
@@ -443,3 +573,4 @@ def get_material(name: str) -> Material:
 def clear_material_cache() -> None:
     """Forget generated/loaded materials (useful for tests and hot reloads)."""
     _materials.clear()
+    _map_materials.clear()

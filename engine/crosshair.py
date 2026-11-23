@@ -14,6 +14,7 @@ CROSSHAIR_COLORS: tuple[
 ] = (
     ("Accent", None),
     ("White", (255, 255, 255)),
+    ("Gold", (214, 196, 96)),
     ("Cyan", (111, 227, 255)),
     ("Mint", (121, 242, 178)),
     ("Lime", (184, 242, 107)),
@@ -60,6 +61,8 @@ class Crosshair:
     def __init__(self) -> None:
         self.enabled = True
         self.color_index = 0  # Accent
+        #: Used when ``color_index`` points past the preset list ("Custom").
+        self.custom_color = (255, 255, 255)
         self.size = 10
         self.gap = 6
         self.thickness = 2
@@ -73,18 +76,27 @@ class Crosshair:
     # Colour
     # ------------------------------------------------------------------
     @property
+    def is_custom_color(self) -> bool:
+        return self.color_index >= len(CROSSHAIR_COLORS)
+
+    @property
     def color_name(self) -> str:
+        if self.is_custom_color:
+            return "Custom"
         return CROSSHAIR_COLORS[self.color_index][0]
 
     @property
     def color(self) -> tuple[int, int, int] | None:
         """Static RGB, or ``None`` when the crosshair follows the UI accent."""
+        if self.is_custom_color:
+            return self.custom_color
         return CROSSHAIR_COLORS[self.color_index][1]
 
     def cycle_color(self, direction: int) -> None:
+        # The editor dropdown includes a "Custom" entry after the presets.
         self.color_index = (
             self.color_index + direction
-        ) % len(CROSSHAIR_COLORS)
+        ) % (len(CROSSHAIR_COLORS) + 1)
 
     # ------------------------------------------------------------------
     # Editing

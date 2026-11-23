@@ -29,7 +29,7 @@ from .scene import Camera, Object3D, Scene
 BACKGROUND = (0.027, 0.039, 0.063)
 """Clear colour (RGB, 0..1) matching the old #070a10."""
 
-_FLOATS_PER_VERTEX = 7  # position(3) + normal(3) + triangle id(1)
+_FLOATS_PER_VERTEX = 9  # position(3) + normal(3) + triangle id(1) + uv(2)
 
 
 class RenderMode(Enum):
@@ -50,6 +50,7 @@ _VERTEX_SHADER = """#version 330 core
 layout (location = 0) in vec3 a_position;
 layout (location = 1) in vec3 a_normal;
 layout (location = 2) in float a_triangle;
+layout (location = 3) in vec2 a_uv;
 
 uniform mat4 u_model;
 uniform mat4 u_view_projection;
@@ -59,12 +60,14 @@ out vec3 v_local_position;
 out vec3 v_local_normal;
 out vec3 v_normal;
 out float v_triangle;
+out vec2 v_uv;
 
 void main() {
     v_local_position = a_position;
     v_local_normal = a_normal;
     v_normal = normalize(u_normal_matrix * a_normal);
     v_triangle = a_triangle;
+    v_uv = a_uv;
     gl_Position = u_view_projection * u_model * vec4(a_position, 1.0);
 }
 """
@@ -74,6 +77,7 @@ in vec3 v_local_position;
 in vec3 v_local_normal;
 in vec3 v_normal;
 in float v_triangle;
+in vec2 v_uv;
 
 uniform int u_mode;              // 0 shaded, 2 triangles, 3 normals
 uniform float u_time;
@@ -84,7 +88,10 @@ uniform float u_iridescent;
 uniform float u_triangle_count;
 uniform sampler2D u_texture;
 uniform int u_use_texture;
+uniform int u_use_mesh_uv;
 uniform float u_uv_scale;
+uniform float u_brightness;
+uniform float u_gamma;
 
 out vec4 frag_color;
 
@@ -114,7 +121,9 @@ void main() {
 
     if (u_mode == 0) {
         if (u_use_texture == 1) {
-            vec2 uv = box_uv(v_local_position, v_local_normal) * u_uv_scale;
+            vec2 uv = u_use_mesh_uv == 1
+                ? v_uv
+                : box_uv(v_local_position, v_local_normal) * u_uv_scale;
             vec3 base = texture(u_texture, uv).rgb;
             color = base * (0.38 + 0.68 * diffuse);
         } else {
@@ -150,6 +159,8 @@ void main() {
         color = vec3(1.0, 0.0, 1.0);
     }
 
+    color = clamp(color * u_brightness, 0.0, 1.0);
+    color = pow(color, vec3(1.0 / max(u_gamma, 0.01)));
     frag_color = vec4(color, 1.0);
 }
 """
@@ -196,6 +207,178 @@ void main() {
 }
 """
 
+_VERTEX_SHADER_130 = """#version 130
+attribute vec3 a_position;
+attribute vec3 a_normal;
+attribute float a_triangle;
+attribute vec2 a_uv;
+
+uniform mat4 u_model;
+uniform mat4 u_view_projection;
+uniform mat3 u_normal_matrix;
+
+varying vec3 v_local_position;
+varying vec3 v_local_normal;
+varying vec3 v_normal;
+varying float v_triangle;
+varying vec2 v_uv;
+
+void main() {
+    v_local_position = a_position;
+    v_local_normal = a_normal;
+    v_normal = normalize(u_normal_matrix * a_normal);
+    v_triangle = a_triangle;
+    v_uv = a_uv;
+    gl_Position = u_view_projection * u_model * vec4(a_position, 1.0);
+}
+"""
+
+_FRAGMENT_SHADER_130 = """#version 130
+varying vec3 v_local_position;
+varying vec3 v_local_normal;
+varying vec3 v_normal;
+varying float v_triangle;
+varying vec2 v_uv;
+
+uniform int u_mode;
+uniform float u_time;
+uniform vec3 u_light;
+uniform float u_hue;
+uniform float u_saturation;
+uniform float u_iridescent;
+uniform float u_triangle_count;
+uniform sampler2D u_texture;
+uniform int u_use_texture;
+uniform int u_use_mesh_uv;
+uniform float u_uv_scale;
+uniform float u_brightness;
+uniform float u_gamma;
+
+vec3 hsv_to_rgb(vec3 c) {
+    vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+
+vec2 box_uv(vec3 position, vec3 normal) {
+    vec3 n = abs(normal);
+    if (n.x >= n.y && n.x >= n.z) {
+        return vec2(position.z, position.y);
+    }
+    if (n.y >= n.z) {
+        return vec2(position.x, position.z);
+    }
+    return vec2(position.x, position.y);
+}
+
+void main() {
+    vec3 normal = normalize(v_normal);
+    float diffuse = max(dot(normal, normalize(u_light)), 0.0);
+    vec3 color;
+
+    if (u_mode == 0) {
+        if (u_use_texture == 1) {
+            vec2 uv = u_use_mesh_uv == 1
+                ? v_uv
+                : box_uv(v_local_position, v_local_normal) * u_uv_scale;
+            vec3 base = texture2D(u_texture, uv).rgb;
+            color = base * (0.38 + 0.68 * diffuse);
+        } else {
+            float hue;
+            float saturation;
+            float value;
+            if (u_iridescent > 0.5) {
+                vec3 n = v_local_normal;
+                vec3 p = v_local_position;
+                hue = 0.5 + u_time * 0.10
+                    + 0.10 * n.x + 0.16 * n.y + 0.22 * n.z
+                    + 0.055 * p.x + 0.045 * p.y + 0.055 * p.z;
+                saturation = 0.85;
+                value = 0.38 + 0.62 * diffuse;
+            } else {
+                hue = u_hue
+                    + 0.022 * v_local_normal.x
+                    + 0.014 * v_local_normal.z
+                    + 0.012 * v_local_position.y;
+                saturation = u_saturation;
+                value = 0.32 + 0.58 * diffuse;
+            }
+            color = hsv_to_rgb(vec3(fract(hue), saturation, value));
+        }
+    } else if (u_mode == 2) {
+        float hue = fract(
+            v_triangle / max(u_triangle_count, 1.0) + u_time * 0.10 + 0.02
+        );
+        color = hsv_to_rgb(vec3(hue, 0.78, 0.42 + 0.55 * diffuse));
+    } else if (u_mode == 3) {
+        color = (normal * 0.5 + 0.5) * (0.55 + 0.45 * diffuse);
+    } else {
+        color = vec3(1.0, 0.0, 1.0);
+    }
+
+    color = clamp(color * u_brightness, 0.0, 1.0);
+    color = pow(color, vec3(1.0 / max(u_gamma, 0.01)));
+    gl_FragColor = vec4(color, 1.0);
+}
+"""
+
+_LINE_VERTEX_SHADER_130 = """#version 130
+attribute vec3 a_position;
+
+uniform mat4 u_model;
+uniform mat4 u_view_projection;
+
+void main() {
+    gl_Position = u_view_projection * u_model * vec4(a_position, 1.0);
+}
+"""
+
+_LINE_FRAGMENT_SHADER_130 = """#version 130
+uniform vec3 u_color;
+
+void main() {
+    gl_FragColor = vec4(u_color, 1.0);
+}
+"""
+
+_OVERLAY_VERTEX_SHADER_130 = """#version 130
+attribute vec2 a_position;
+attribute vec2 a_uv;
+
+varying vec2 v_uv;
+
+void main() {
+    v_uv = a_uv;
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"""
+
+_OVERLAY_FRAGMENT_SHADER_130 = """#version 130
+varying vec2 v_uv;
+uniform sampler2D u_texture;
+
+void main() {
+    gl_FragColor = texture2D(u_texture, v_uv);
+}
+"""
+
+_SHADER_SET_330 = {
+    "vertex": _VERTEX_SHADER,
+    "fragment": _FRAGMENT_SHADER,
+    "line_vertex": _LINE_VERTEX_SHADER,
+    "line_fragment": _LINE_FRAGMENT_SHADER,
+    "overlay_vertex": _OVERLAY_VERTEX_SHADER,
+    "overlay_fragment": _OVERLAY_FRAGMENT_SHADER,
+}
+
+_SHADER_SET_130 = {
+    "vertex": _VERTEX_SHADER_130,
+    "fragment": _FRAGMENT_SHADER_130,
+    "line_vertex": _LINE_VERTEX_SHADER_130,
+    "line_fragment": _LINE_FRAGMENT_SHADER_130,
+    "overlay_vertex": _OVERLAY_VERTEX_SHADER_130,
+    "overlay_fragment": _OVERLAY_FRAGMENT_SHADER_130,
+}
+
 
 def _hex_rgb(color: str) -> tuple[float, float, float]:
     value = color.lstrip("#")
@@ -211,6 +394,8 @@ class GLRenderer:
 
     def __init__(self) -> None:
         self.mode = RenderMode.SHADED
+        self.brightness = 1.0
+        self.gamma = 1.0
         self.stats: dict[str, int] = {
             "base_tris": 0,
             "drawn_tris": 0,
@@ -253,16 +438,8 @@ class GLRenderer:
     def close(self) -> None:
         if not self._ready:
             return
+        self.release_scene()
         try:
-            for entry in self._mesh_cache.values():
-                GL.glDeleteVertexArrays(1, [entry["vao"]])
-                GL.glDeleteBuffers(1, [entry["vbo"]])
-                if entry["edge_vao"]:
-                    GL.glDeleteVertexArrays(1, [entry["edge_vao"]])
-                    GL.glDeleteBuffers(1, [entry["edge_vbo"]])
-            for texture in self._material_textures.values():
-                GL.glDeleteTextures([texture])
-            self._material_textures.clear()
             GL.glDeleteProgram(self._program)
             GL.glDeleteProgram(self._line_program)
             GL.glDeleteProgram(self._overlay_program)
@@ -272,18 +449,74 @@ class GLRenderer:
             pass
         self._ready = False
 
+    def release_scene(self) -> None:
+        """Free mesh and material GPU resources for the current scene.
+
+        The window and its shader programs stay alive: this is what runs when
+        the world is unloaded on ``Disconnect`` so a later ``New game`` can
+        upload a fresh set of objects.
+        """
+        if self._ready:
+            try:
+                for entry in self._mesh_cache.values():
+                    GL.glDeleteVertexArrays(1, [entry["vao"]])
+                    GL.glDeleteBuffers(1, [entry["vbo"]])
+                    if entry["edge_vao"]:
+                        GL.glDeleteVertexArrays(1, [entry["edge_vao"]])
+                        GL.glDeleteBuffers(1, [entry["edge_vbo"]])
+                for texture in self._material_textures.values():
+                    GL.glDeleteTextures([texture])
+            except Exception:
+                pass
+        self._mesh_cache.clear()
+        self._material_textures.clear()
+
+    def clear(self, width: int, height: int) -> None:
+        """Clear the frame without drawing any scene geometry.
+
+        Used by the main menu, where the world is not loaded at all and only
+        the 2D front-end overlay should reach the screen.
+        """
+        self._ensure_gl()
+        GL.glViewport(0, 0, width, height)
+        GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+
     def _ensure_gl(self) -> None:
         if self._ready:
             return
 
+        try:
+            self._init_programs(_SHADER_SET_330)
+        except Exception:
+            # Older drivers/VMs may lack GLSL 330 core; fall back to GLSL 130.
+            self._init_programs(_SHADER_SET_130)
+
+        self._mesh_cache.clear()
+        self._create_overlay_buffers()
+
+        version = GL.glGetString(GL.GL_VERSION)
+        renderer = GL.glGetString(GL.GL_RENDERER)
+        version = version.decode() if isinstance(version, bytes) else str(version)
+        renderer = renderer.decode() if isinstance(renderer, bytes) else str(renderer)
+        self.info = f"OpenGL {version.split()[0]} · {renderer}"
+        self._ready = True
+
+    def _init_programs(self, shaders: dict[str, str]) -> None:
         self._program = self._build_program(
-            _VERTEX_SHADER, _FRAGMENT_SHADER
+            shaders["vertex"],
+            shaders["fragment"],
+            {"a_position": 0, "a_normal": 1, "a_triangle": 2, "a_uv": 3},
         )
         self._line_program = self._build_program(
-            _LINE_VERTEX_SHADER, _LINE_FRAGMENT_SHADER
+            shaders["line_vertex"],
+            shaders["line_fragment"],
+            {"a_position": 0},
         )
         self._overlay_program = self._build_program(
-            _OVERLAY_VERTEX_SHADER, _OVERLAY_FRAGMENT_SHADER
+            shaders["overlay_vertex"],
+            shaders["overlay_fragment"],
+            {"a_position": 0, "a_uv": 1},
         )
         self._uniforms = {
             name: GL.glGetUniformLocation(self._program, name)
@@ -291,7 +524,8 @@ class GLRenderer:
                 "u_model", "u_view_projection", "u_normal_matrix",
                 "u_mode", "u_time", "u_light", "u_hue", "u_saturation",
                 "u_iridescent", "u_triangle_count", "u_texture",
-                "u_use_texture", "u_uv_scale",
+                "u_use_texture", "u_use_mesh_uv", "u_uv_scale",
+                "u_brightness", "u_gamma",
             )
         }
         self._line_uniforms = {
@@ -303,15 +537,6 @@ class GLRenderer:
                 self._overlay_program, "u_texture"
             )
         }
-        self._mesh_cache.clear()
-        self._create_overlay_buffers()
-
-        version = GL.glGetString(GL.GL_VERSION)
-        renderer = GL.glGetString(GL.GL_RENDERER)
-        version = version.decode() if isinstance(version, bytes) else str(version)
-        renderer = renderer.decode() if isinstance(renderer, bytes) else str(renderer)
-        self.info = f"OpenGL {version.split()[0]} · {renderer}"
-        self._ready = True
 
     @staticmethod
     def _compile_shader(source: str, kind: int) -> int:
@@ -325,12 +550,19 @@ class GLRenderer:
             raise RuntimeError(f"Shader compilation failed:\n{log}")
         return shader
 
-    def _build_program(self, vertex: str, fragment: str) -> int:
+    def _build_program(
+        self,
+        vertex: str,
+        fragment: str,
+        attribs: dict[str, int] | None = None,
+    ) -> int:
         vs = self._compile_shader(vertex, GL.GL_VERTEX_SHADER)
         fs = self._compile_shader(fragment, GL.GL_FRAGMENT_SHADER)
         program = GL.glCreateProgram()
         GL.glAttachShader(program, vs)
         GL.glAttachShader(program, fs)
+        for name, index in (attribs or {}).items():
+            GL.glBindAttribLocation(program, index, name)
         GL.glLinkProgram(program)
         GL.glDeleteShader(vs)
         GL.glDeleteShader(fs)
@@ -352,16 +584,19 @@ class GLRenderer:
 
         mesh = obj.mesh
         normals = mesh.face_normals()
+        has_uvs = len(mesh.uvs) == len(mesh.vertices)
         values = array.array("f")
         for triangle_index, (a, b, c) in enumerate(mesh.triangles):
             normal = normals[triangle_index]
             for vertex_index in (a, b, c):
                 vertex = mesh.vertices[vertex_index]
+                u, v = mesh.uvs[vertex_index] if has_uvs else (0.0, 0.0)
                 values.extend(
                     (
                         vertex.x, vertex.y, vertex.z,
                         normal.x, normal.y, normal.z,
                         float(triangle_index),
+                        u, v,
                     )
                 )
 
@@ -387,6 +622,11 @@ class GLRenderer:
         GL.glVertexAttribPointer(
             2, 1, GL.GL_FLOAT, GL.GL_FALSE, stride,
             ctypes.c_void_p(6 * 4),
+        )
+        GL.glEnableVertexAttribArray(3)
+        GL.glVertexAttribPointer(
+            3, 2, GL.GL_FLOAT, GL.GL_FALSE, stride,
+            ctypes.c_void_p(7 * 4),
         )
         GL.glBindVertexArray(0)
 
@@ -539,6 +779,8 @@ class GLRenderer:
             self._light[0], self._light[1], self._light[2],
         )
         GL.glUniform1f(self._uniforms["u_time"], time)
+        GL.glUniform1f(self._uniforms["u_brightness"], self.brightness)
+        GL.glUniform1f(self._uniforms["u_gamma"], self.gamma)
 
         if mode == RenderMode.TRIANGLES:
             shader_mode = 2
@@ -596,6 +838,10 @@ class GLRenderer:
             GL.glActiveTexture(GL.GL_TEXTURE0)
             GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
             GL.glUniform1i(self._uniforms["u_use_texture"], 1)
+            GL.glUniform1i(
+                self._uniforms["u_use_mesh_uv"],
+                1 if len(obj.mesh.uvs) == len(obj.mesh.vertices) else 0,
+            )
             GL.glUniform1f(self._uniforms["u_uv_scale"], obj.uv_scale)
         else:
             GL.glUniform1i(self._uniforms["u_use_texture"], 0)

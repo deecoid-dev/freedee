@@ -68,6 +68,34 @@ void main() {
 }
 """
 
+_UI_VERTEX_SHADER_130 = """#version 130
+attribute vec2 a_position;
+attribute vec2 a_uv;
+attribute vec4 a_color;
+
+uniform mat4 u_projection;
+
+varying vec2 v_uv;
+varying vec4 v_color;
+
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
+}
+"""
+
+_UI_FRAGMENT_SHADER_130 = """#version 130
+varying vec2 v_uv;
+varying vec4 v_color;
+
+uniform sampler2D u_texture;
+
+void main() {
+    gl_FragColor = texture2D(u_texture, v_uv) * v_color;
+}
+"""
+
 
 class _Texture:
     """A GPU texture together with its pixel dimensions."""
@@ -147,9 +175,16 @@ class UICanvas:
         if self._ready:
             return
 
-        self._program = self._build_program(
-            _UI_VERTEX_SHADER, _UI_FRAGMENT_SHADER
-        )
+        try:
+            self._init_program(_UI_VERTEX_SHADER, _UI_FRAGMENT_SHADER)
+        except Exception:
+            self._init_program(_UI_VERTEX_SHADER_130, _UI_FRAGMENT_SHADER_130)
+
+        self._white = self._upload_surface(self._white_surface())
+        self._ready = True
+
+    def _init_program(self, vertex: str, fragment: str) -> None:
+        self._program = self._build_program(vertex, fragment)
         self._projection_uniform = GL.glGetUniformLocation(
             self._program, "u_projection"
         )
@@ -177,9 +212,6 @@ class UICanvas:
         )
         GL.glBindVertexArray(0)
 
-        self._white = self._upload_surface(self._white_surface())
-        self._ready = True
-
     @staticmethod
     def _white_surface() -> pygame.Surface:
         surface = pygame.Surface((1, 1), pygame.SRCALPHA)
@@ -204,6 +236,9 @@ class UICanvas:
         program = GL.glCreateProgram()
         GL.glAttachShader(program, vs)
         GL.glAttachShader(program, fs)
+        GL.glBindAttribLocation(program, 0, "a_position")
+        GL.glBindAttribLocation(program, 1, "a_uv")
+        GL.glBindAttribLocation(program, 2, "a_color")
         GL.glLinkProgram(program)
         GL.glDeleteShader(vs)
         GL.glDeleteShader(fs)

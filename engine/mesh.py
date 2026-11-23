@@ -16,6 +16,9 @@ class Mesh:
         self.name = name
         self.vertices: list[Vec3] = []
         self.triangles: list[tuple[int, int, int]] = []
+        #: Optional texture coordinates parallel to ``vertices``.  Meshes with
+        #: an empty list use the renderer's world-space box projection.
+        self.uvs: list[tuple[float, float]] = []
         self._normals: list[Vec3] = []
         self._edges: list[tuple[int, int, tuple[int, ...]]] | None = None
 

@@ -123,6 +123,8 @@ class Scene:
         self.colliders: list[AABB] = []
         self.spawn = Vec3(0.0, 0.0, 7.5)
         self.spawn_yaw = 0.0
+        #: Human readable map name, shown in the debug overlay.
+        self.title = ""
 
     def add(self, obj: Object3D) -> Object3D:
         self.objects.append(obj)
@@ -131,3 +133,11 @@ class Scene:
     def add_collider(self, collider: AABB) -> AABB:
         self.colliders.append(collider)
         return collider
+
+    def clear(self) -> None:
+        """Drop every object and collider so the world can be rebuilt."""
+        self.objects.clear()
+        self.colliders.clear()
+        self.spawn = Vec3(0.0, 0.0, 7.5)
+        self.spawn_yaw = 0.0
+        self.title = ""
