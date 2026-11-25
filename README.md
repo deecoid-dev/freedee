@@ -1,21 +1,26 @@
-## My first project - an open-source 3D engine in Python.
+# Installing and launching
+## Windows:
 
-I got bored while sitting at home during the break. 
-So I wrote this over the course of a couple of days.
-Feel free to use it however you like.
-
-## Installing and launching
-
-Clone this repository, then make sure you have installed dependencies
+Download project as ZIP. Then make sure you have installed needed packages:
 ```bash
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
-After installing dependencies, run engine in your terminal:
+Then, just double-click on run.bat file.
+
+## Linux:
+
+At first, clone this repository
+```bash
+git clone https://github.com/deecoid-dev/freedee.git
+```
+Then, the same way:
+```bash
+pip install -r requirements.txt
+```
+Then run main.py in your terminal:
 ```bash
 python3 main.py
 ```
-If you are Windows user, you can just double-click on run.bat file.
-
 ## Hotkeys
 - F3 - debug screen
 - F7 - debug render modes
@@ -24,6 +29,3 @@ If you are Windows user, you can just double-click on run.bat file.
 - Tab - fly / walk mode
 - M - cat
 
-## Was AI used?
-
-100% of the project was written by AI. Sorry :)
