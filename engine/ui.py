@@ -1868,6 +1868,7 @@ class UI:
             ("C", "reset camera"),
         )
         interface = (
+            ("F2", "console debug"),
             ("F3", "debug overlay"),
             ("F7", "render mode"),
             ("F11", "fullscreen"),
@@ -2206,8 +2207,8 @@ class UI:
         )
         self.text(
             target, self.font_small,
-            "F3  debug     F7  render mode     F11  fullscreen     "
-            "M  cat     Esc  options",
+            "F2  console     F3  debug     F7  render mode     "
+            "F11  fullscreen     M  cat     Esc  options",
             (16, height - 16), theme.muted, anchor="bottomleft", shadow=True,
         )
 

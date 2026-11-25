@@ -940,3 +940,9 @@ def list_maps() -> list[MapInfo]:
         )
     entries.sort(key=lambda entry: entry.name.casefold())
     return entries
+
+# В пламенной душе пригорел весь керосин
+# И закрыт уже до завтра новый магазин
+# В магазине том, мы погавкались с тобою
+# И продрав глаза
+# Завтра я уйду к другой!!!

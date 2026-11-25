@@ -14,6 +14,7 @@ import pygame
 from .canvas import UICanvas
 from .collision import CollisionWorld
 from .crosshair import Crosshair
+from .debug import ConsoleDebugger
 from .game_state import GameState
 from .mapfile import MapInfo, ensure_maps_directory, list_maps, load_map_into
 from .math3d import Vec3
@@ -147,6 +148,7 @@ class Engine:
         self.invert_y = False
         self.cat_visible = False
         self.crosshair = Crosshair()
+        self.console_debug = ConsoleDebugger()
 
         self.toast_text = ""
         self.toast_timer = 0.0
@@ -211,6 +213,8 @@ class Engine:
             self.windowed_width = width
             self.windowed_height = height
             self._recreate_display((width, height), _GL_FLAGS)
+
+        self.console_debug.start(self)
 
     def _apply_loaded_settings(self) -> None:
         settings = self.settings
@@ -387,18 +391,30 @@ class Engine:
     def run(self) -> None:
         self._running = True
         self._clock = pygame.time.Clock()
+        delta = 0.0
         try:
             while self._running:
                 delta = self._clock.tick(TARGET_FPS) / 1000.0
                 if delta <= 0.0:
                     delta = 1.0 / TARGET_FPS
                 delta = min(delta, 0.1)
+
+                self.console_debug.stage = "events"
                 self._handle_events()
                 if not self._running:
                     break
+
+                self.console_debug.stage = "update"
                 self._update(delta)
+                self.console_debug.stage = "render"
                 self._render_frame(delta)
+                self.console_debug.stage = "frame"
+                self.console_debug.tick(self, delta)
+        except BaseException as exc:
+            self.console_debug.report_crash(self, delta, exc)
+            raise
         finally:
+            self.console_debug.stop()
             self.close()
 
     def close(self) -> None:
@@ -419,6 +435,7 @@ class Engine:
     # ------------------------------------------------------------------
     def _handle_events(self) -> None:
         for event in pygame.event.get():
+            self.console_debug.record_event(event)
             if event.type == pygame.QUIT:
                 self._running = False
                 return
@@ -473,6 +490,14 @@ class Engine:
 
     def _on_key_down(self, event: pygame.event.Event) -> None:
         key = event.key
+
+        if key == pygame.K_F2:
+            enabled = self.console_debug.toggle()
+            self.toast_text = (
+                "CONSOLE DEBUG ON" if enabled else "CONSOLE DEBUG OFF"
+            )
+            self.toast_timer = 1.6
+            return
 
         if self.settings_open:
             if key == pygame.K_ESCAPE:
@@ -1587,6 +1612,11 @@ class Engine:
             ("resolution", f"{width}×{height}  {window_state}"),
             ("world", self.world_title[:40] or "main menu"),
             ("render mode", self.render_mode.value),
+            (
+                "console debug",
+                f"{'on' if self.console_debug.enabled else 'off'} / "
+                f"every {self.console_debug.interval} ticks",
+            ),
             ("movement", "walk" if self.walk_mode else "free camera"),
             (
                 "mouse",

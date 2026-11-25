@@ -146,3 +146,8 @@ class Crosshair:
             dot = max(1, int(self.dot_size))
             rects.append((cx - dot // 2, cy - dot // 2, dot, dot))
         return rects
+
+# Ты уйдешь домой под утро
+# А могилка будет рыхлой
+# Но лишь только ночь настанет
+# Снова нам прекрасно станет

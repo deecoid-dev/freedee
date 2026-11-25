@@ -18,7 +18,7 @@ import time
 import traceback
 from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TextIO
 
 import pygame
 
@@ -26,6 +26,11 @@ from . import __version__
 
 if TYPE_CHECKING:
     from .app import Engine
+
+LOG_FILE_NAME = "freedee_debug.log"
+"""Debugger output is mirrored here, next to this module."""
+
+LOG_FILE = Path(__file__).resolve().parent / LOG_FILE_NAME
 
 REPORT_EVERY_TICKS = 2
 """Print one state line every N completed frames."""
@@ -112,83 +117,135 @@ class ConsoleDebugger:
         interval: int = REPORT_EVERY_TICKS,
         *,
         enabled: bool = True,
+        log_path: str | Path | None = None,
     ) -> None:
         self.interval = max(1, int(interval))
         self.enabled = enabled
         self.stage = "init"
         self.frame = 0
 
+        self.log_path = Path(log_path) if log_path is not None else LOG_FILE
+        self._log_file: TextIO | None = None
+        self._log_error = ""
+
         self._started = time.perf_counter()
         self._history: deque[str] = deque(maxlen=HISTORY_TICKS)
         self._events: deque[str] = deque(maxlen=EVENT_HISTORY)
 
     # ------------------------------------------------------------------
+    # Log file
+    # ------------------------------------------------------------------
+    def _open_log(self) -> None:
+        """Create a fresh log next to the engine; never stop the game."""
+        self._close_log()
+        self._log_error = ""
+        try:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_file = self.log_path.open(
+                "w",
+                encoding="utf-8",
+                errors="replace",
+                buffering=1,
+            )
+        except OSError as exc:
+            self._log_file = None
+            self._log_error = str(exc)
+
+    def _close_log(self) -> None:
+        if self._log_file is None:
+            return
+        try:
+            self._log_file.close()
+        except Exception:
+            pass
+        self._log_file = None
+
+    def _write_log(self, text: str) -> None:
+        """Write raw text to the log file, disabling it if the disk fails."""
+        if self._log_file is None:
+            return
+        try:
+            self._log_file.write(text)
+            self._log_file.flush()
+        except Exception:
+            self._close_log()
+
+    def _emit(self, message: str = "") -> None:
+        """Write one line to both stdout and the log file."""
+        try:
+            print(message, flush=True)
+        except Exception:
+            pass
+        self._write_log(message + "\n")
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self, engine: "Engine") -> None:
-        """Enable the native crash handler and print the startup banner."""
+        """Open the log, enable the crash handler and print the banner."""
+        self._open_log()
         try:
-            faulthandler.enable()
+            faulthandler.enable(
+                file=self._log_file if self._log_file is not None else sys.stderr
+            )
         except Exception:
             pass
 
         self._started = time.perf_counter()
         settings = _get(engine, "settings")
         settings_path = _get(settings, "path", "?")
-        try:
-            print("=" * 78, flush=True)
-            print(
-                f"[freedee] engine {__version__} | "
-                f"Python {platform.python_version()} "
-                f"({platform.architecture()[0]}) | {_pygame_version()}",
-                flush=True,
+        self._emit("=" * 78)
+        self._emit(
+            f"[freedee] engine {__version__} | "
+            f"Python {platform.python_version()} "
+            f"({platform.architecture()[0]}) | {_pygame_version()}"
+        )
+        self._emit(f"[freedee] cwd={Path.cwd()} | settings={settings_path}")
+        if self._log_file is not None:
+            self._emit(
+                f"[freedee] log file: {self.log_path} "
+                f"(recreated on every launch)"
             )
-            print(
-                f"[freedee] cwd={Path.cwd()} | settings={settings_path}",
-                flush=True,
+        else:
+            self._emit(
+                f"[freedee] log file unavailable: {self.log_path} "
+                f"({self._log_error or 'unknown error'})"
             )
-            print(
-                f"[freedee] console debugger "
-                f"{'ON' if self.enabled else 'OFF'}: one state line every "
-                f"{self.interval} ticks; F2 toggles, F3 is the in-game overlay",
-                flush=True,
-            )
-            print(
-                f"[freedee] crash history: last {HISTORY_TICKS} ticks "
-                f"and {EVENT_HISTORY} input events",
-                flush=True,
-            )
-            print("=" * 78, flush=True)
-        except Exception:
-            pass
+        self._emit(
+            f"[freedee] console debugger "
+            f"{'ON' if self.enabled else 'OFF'}: one state line every "
+            f"{self.interval} ticks; F2 toggles, F3 is the in-game overlay"
+        )
+        self._emit(
+            f"[freedee] crash history: last {HISTORY_TICKS} ticks "
+            f"and {EVENT_HISTORY} input events"
+        )
+        self._emit("=" * 78)
 
     def stop(self) -> None:
         elapsed = time.perf_counter() - self._started
+        self._emit(
+            f"[freedee] stopped after {self.frame} ticks "
+            f"({elapsed:.2f}s)"
+        )
         try:
-            print(
-                f"[freedee] stopped after {self.frame} ticks "
-                f"({elapsed:.2f}s)",
-                flush=True,
-            )
+            faulthandler.disable()
         except Exception:
             pass
+        self._close_log()
 
     def toggle(self) -> bool:
         """Flip periodic reporting and tell the user what happened."""
         self.enabled = not self.enabled
-        try:
-            print(
-                f"[freedee] console debugger "
-                f"{'ON' if self.enabled else 'OFF'}"
-                + (
-                    f" (one state line every {self.interval} ticks)"
-                    if self.enabled
-                    else ""
-                ),
-                flush=True,
+        self._emit(
+            f"[freedee] console debugger "
+            f"{'ON' if self.enabled else 'OFF'}"
+            + (
+                f" (one state line every {self.interval} ticks)"
+                if self.enabled
+                else ""
             )
-        except Exception:
-            pass
+        )
         return self.enabled
 
     # ------------------------------------------------------------------
@@ -241,10 +298,9 @@ class ConsoleDebugger:
             line = self.format_line(snapshot)
             self._history.append(line)
             if self.enabled and self.frame % self.interval == 0:
-                print(line, flush=True)
+                self._emit(line)
         except Exception:
-            traceback.print_exc(file=sys.stdout)
-            sys.stdout.flush()
+            self._emit(traceback.format_exc().rstrip())
 
     # ------------------------------------------------------------------
     # Snapshot and formatting
@@ -473,43 +529,49 @@ class ConsoleDebugger:
         """Dump the recent history and current state before re-raising."""
         try:
             snapshot = self.capture(engine, delta)
-            print(flush=True)
-            print("!" * 78, flush=True)
-            print(
+            self._emit()
+            self._emit("!" * 78)
+            self._emit(
                 f"[freedee] CRASH at frame {self.frame} during "
-                f"'{self.stage}': {type(exc).__name__}: {exc}",
-                flush=True,
+                f"'{self.stage}': {type(exc).__name__}: {exc}"
             )
-            print("!" * 78, flush=True)
+            self._emit("!" * 78)
 
-            print(
-                f"[freedee] last {CRASH_EVENT_HISTORY} input events:",
-                flush=True,
+            self._emit(
+                f"[freedee] last {CRASH_EVENT_HISTORY} input events:"
             )
             events = list(self._events)[-CRASH_EVENT_HISTORY:]
             if events:
                 for event in events:
-                    print(f"  {event}", flush=True)
+                    self._emit(f"  {event}")
             else:
-                print("  (none)", flush=True)
+                self._emit("  (none)")
 
-            print(
-                f"[freedee] last {CRASH_HISTORY_TICKS} completed ticks:",
-                flush=True,
+            self._emit(
+                f"[freedee] last {CRASH_HISTORY_TICKS} completed ticks:"
             )
             ticks = list(self._history)[-CRASH_HISTORY_TICKS:]
             if ticks:
                 for tick in ticks:
-                    print(f"  {tick}", flush=True)
+                    self._emit(f"  {tick}")
             else:
-                print("  (none)", flush=True)
+                self._emit("  (none)")
 
-            print("[freedee] state at crash:", flush=True)
+            self._emit("[freedee] state at crash:")
             for line in self.format_detail(snapshot):
-                print(line, flush=True)
-            print("!" * 78, flush=True)
+                self._emit(line)
+            self._emit("!" * 78)
+
+            # Python prints the traceback to stderr after the exception
+            # propagates; keep a copy in the log as well.
+            self._write_log("[freedee] traceback:\n")
+            self._write_log(
+                "".join(
+                    traceback.format_exception(
+                        type(exc), exc, exc.__traceback__
+                    )
+                )
+            )
         except Exception:
             # Never hide the original failure behind a debugger failure.
-            traceback.print_exc(file=sys.stdout)
-            sys.stdout.flush()
-            sys.stderr.flush()
+            self._emit(traceback.format_exc().rstrip())

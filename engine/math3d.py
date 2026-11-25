@@ -9,7 +9,10 @@ from __future__ import annotations
 import math
 
 Mat4 = tuple[float, ...]
-
+# Нас всех зароют в шар земной
+# Возьми мою шинель, да иди домой
+# Не смей мне петь за упокой
+# А возьми шинель, да иди домой
 
 class Vec3:
     """A three-component vector."""
