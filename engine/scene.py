@@ -20,6 +20,7 @@ from .mesh import Mesh
 
 if TYPE_CHECKING:
     from .materials import Material
+    from .skybox import Skybox
 
 
 class Camera:
@@ -125,6 +126,8 @@ class Scene:
         self.spawn_yaw = 0.0
         #: Human readable map name, shown in the debug overlay.
         self.title = ""
+        #: Optional equirectangular panorama drawn behind all geometry.
+        self.skybox: "Skybox | None" = None
 
     def add(self, obj: Object3D) -> Object3D:
         self.objects.append(obj)
@@ -141,3 +144,4 @@ class Scene:
         self.spawn = Vec3(0.0, 0.0, 7.5)
         self.spawn_yaw = 0.0
         self.title = ""
+        self.skybox = None

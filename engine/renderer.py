@@ -25,6 +25,7 @@ from OpenGL import GL
 from .math3d import Mat4, mat4_look_at, mat4_mul, mat4_perspective
 from .materials import Material
 from .scene import Camera, Object3D, Scene
+from .skybox import SKYBOX_RADIUS, Skybox, create_sky_dome
 
 BACKGROUND = (0.027, 0.039, 0.063)
 """Clear colour (RGB, 0..1) matching the old #070a10."""
@@ -207,6 +208,45 @@ void main() {
 }
 """
 
+_SKY_VERTEX_SHADER = """#version 330 core
+layout (location = 0) in vec3 a_position;
+
+uniform mat4 u_view_projection;
+uniform vec3 u_center;
+uniform float u_radius;
+
+out vec3 v_direction;
+
+void main() {
+    v_direction = a_position;
+    gl_Position = u_view_projection * vec4(a_position * u_radius + u_center, 1.0);
+}
+"""
+
+_SKY_FRAGMENT_SHADER = """#version 330 core
+in vec3 v_direction;
+
+uniform sampler2D u_texture;
+uniform float u_brightness;
+uniform float u_gamma;
+
+out vec4 frag_color;
+
+const float PI = 3.141592653589793;
+
+void main() {
+    vec3 direction = normalize(v_direction);
+    // Equirectangular panorama: u wraps around the horizon, v runs from the
+    // zenith (0) to the nadir (1).
+    float u = atan(direction.z, direction.x) / (2.0 * PI) + 0.5;
+    float v = acos(clamp(direction.y, -1.0, 1.0)) / PI;
+    vec3 color = texture(u_texture, vec2(u, v)).rgb;
+    color = clamp(color * u_brightness, 0.0, 1.0);
+    color = pow(color, vec3(1.0 / max(u_gamma, 0.01)));
+    frag_color = vec4(color, 1.0);
+}
+"""
+
 _VERTEX_SHADER_130 = """#version 130
 attribute vec3 a_position;
 attribute vec3 a_normal;
@@ -361,6 +401,41 @@ void main() {
 }
 """
 
+_SKY_VERTEX_SHADER_130 = """#version 130
+attribute vec3 a_position;
+
+uniform mat4 u_view_projection;
+uniform vec3 u_center;
+uniform float u_radius;
+
+varying vec3 v_direction;
+
+void main() {
+    v_direction = a_position;
+    gl_Position = u_view_projection * vec4(a_position * u_radius + u_center, 1.0);
+}
+"""
+
+_SKY_FRAGMENT_SHADER_130 = """#version 130
+varying vec3 v_direction;
+
+uniform sampler2D u_texture;
+uniform float u_brightness;
+uniform float u_gamma;
+
+const float PI = 3.141592653589793;
+
+void main() {
+    vec3 direction = normalize(v_direction);
+    float u = atan(direction.z, direction.x) / (2.0 * PI) + 0.5;
+    float v = acos(clamp(direction.y, -1.0, 1.0)) / PI;
+    vec3 color = texture2D(u_texture, vec2(u, v)).rgb;
+    color = clamp(color * u_brightness, 0.0, 1.0);
+    color = pow(color, vec3(1.0 / max(u_gamma, 0.01)));
+    gl_FragColor = vec4(color, 1.0);
+}
+"""
+
 _SHADER_SET_330 = {
     "vertex": _VERTEX_SHADER,
     "fragment": _FRAGMENT_SHADER,
@@ -368,6 +443,8 @@ _SHADER_SET_330 = {
     "line_fragment": _LINE_FRAGMENT_SHADER,
     "overlay_vertex": _OVERLAY_VERTEX_SHADER,
     "overlay_fragment": _OVERLAY_FRAGMENT_SHADER,
+    "sky_vertex": _SKY_VERTEX_SHADER,
+    "sky_fragment": _SKY_FRAGMENT_SHADER,
 }
 
 _SHADER_SET_130 = {
@@ -377,6 +454,8 @@ _SHADER_SET_130 = {
     "line_fragment": _LINE_FRAGMENT_SHADER_130,
     "overlay_vertex": _OVERLAY_VERTEX_SHADER_130,
     "overlay_fragment": _OVERLAY_FRAGMENT_SHADER_130,
+    "sky_vertex": _SKY_VERTEX_SHADER_130,
+    "sky_fragment": _SKY_FRAGMENT_SHADER_130,
 }
 
 
@@ -409,11 +488,15 @@ class GLRenderer:
         self._program = 0
         self._line_program = 0
         self._overlay_program = 0
+        self._sky_program = 0
         self._uniforms: dict[str, int] = {}
         self._line_uniforms: dict[str, int] = {}
         self._overlay_uniforms: dict[str, int] = {}
+        self._sky_uniforms: dict[str, int] = {}
         self._mesh_cache: dict[int, dict] = {}
         self._material_textures: dict[int, int] = {}
+        self._skybox_textures: dict[int, int] = {}
+        self._sky_dome: dict | None = None
         self._overlay = {
             "texture": 0,
             "vao": 0,
@@ -430,10 +513,13 @@ class GLRenderer:
         self._ready = False
         self._mesh_cache.clear()
         self._material_textures.clear()
+        self._skybox_textures.clear()
+        self._sky_dome = None
         self._overlay = {"texture": 0, "vao": 0, "vbo": 0, "size": (0, 0)}
         self._program = 0
         self._line_program = 0
         self._overlay_program = 0
+        self._sky_program = 0
 
     def close(self) -> None:
         if not self._ready:
@@ -443,6 +529,11 @@ class GLRenderer:
             GL.glDeleteProgram(self._program)
             GL.glDeleteProgram(self._line_program)
             GL.glDeleteProgram(self._overlay_program)
+            GL.glDeleteProgram(self._sky_program)
+            if self._sky_dome is not None:
+                GL.glDeleteVertexArrays(1, [self._sky_dome["vao"]])
+                GL.glDeleteBuffers(1, [self._sky_dome["vbo"]])
+                self._sky_dome = None
             if self._overlay["texture"]:
                 GL.glDeleteTextures([self._overlay["texture"]])
         except Exception:
@@ -466,10 +557,13 @@ class GLRenderer:
                         GL.glDeleteBuffers(1, [entry["edge_vbo"]])
                 for texture in self._material_textures.values():
                     GL.glDeleteTextures([texture])
+                for texture in self._skybox_textures.values():
+                    GL.glDeleteTextures([texture])
             except Exception:
                 pass
         self._mesh_cache.clear()
         self._material_textures.clear()
+        self._skybox_textures.clear()
 
     def clear(self, width: int, height: int) -> None:
         """Clear the frame without drawing any scene geometry.
@@ -518,6 +612,11 @@ class GLRenderer:
             shaders["overlay_fragment"],
             {"a_position": 0, "a_uv": 1},
         )
+        self._sky_program = self._build_program(
+            shaders["sky_vertex"],
+            shaders["sky_fragment"],
+            {"a_position": 0},
+        )
         self._uniforms = {
             name: GL.glGetUniformLocation(self._program, name)
             for name in (
@@ -535,6 +634,13 @@ class GLRenderer:
         self._overlay_uniforms = {
             "u_texture": GL.glGetUniformLocation(
                 self._overlay_program, "u_texture"
+            )
+        }
+        self._sky_uniforms = {
+            name: GL.glGetUniformLocation(self._sky_program, name)
+            for name in (
+                "u_view_projection", "u_center", "u_radius",
+                "u_texture", "u_brightness", "u_gamma",
             )
         }
 
@@ -712,6 +818,121 @@ class GLRenderer:
         self._material_textures[key] = texture
         return texture
 
+    def _skybox_texture(self, skybox: Skybox) -> int:
+        """Upload and cache the panorama belonging to the current scene."""
+        key = id(skybox.surface)
+        texture = self._skybox_textures.get(key)
+        if texture is not None:
+            return texture
+
+        surface = skybox.surface
+        width, height = surface.get_size()
+        to_bytes = getattr(pygame.image, "tobytes", None)
+        if to_bytes is not None:
+            data = to_bytes(surface, "RGBA", False)
+        else:  # pragma: no cover - older pygame
+            data = pygame.image.tostring(surface, "RGBA", False)
+
+        texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+        GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER,
+            GL.GL_LINEAR_MIPMAP_LINEAR,
+        )
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR
+        )
+        # Longitude wraps around the horizon; latitude is clamped so the
+        # panorama never bleeds across the poles.
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT
+        )
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE
+        )
+        GL.glTexImage2D(
+            GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, width, height, 0,
+            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data,
+        )
+        GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+
+        self._skybox_textures[key] = texture
+        return texture
+
+    def _sky_dome_entry(self) -> dict:
+        """Upload the unit sphere used by the sky pass once per context."""
+        if self._sky_dome is not None:
+            return self._sky_dome
+
+        mesh = create_sky_dome()
+        values = array.array("f")
+        for a, b, c in mesh.triangles:
+            for index in (a, b, c):
+                vertex = mesh.vertices[index]
+                values.extend((vertex.x, vertex.y, vertex.z))
+
+        vao = GL.glGenVertexArrays(1)
+        vbo = GL.glGenBuffers(1)
+        GL.glBindVertexArray(vao)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vbo)
+        upload = (ctypes.c_float * len(values))(*values)
+        GL.glBufferData(
+            GL.GL_ARRAY_BUFFER, ctypes.sizeof(upload), upload, GL.GL_STATIC_DRAW
+        )
+        GL.glEnableVertexAttribArray(0)
+        GL.glVertexAttribPointer(
+            0, 3, GL.GL_FLOAT, GL.GL_FALSE, 3 * 4, None
+        )
+        GL.glBindVertexArray(0)
+
+        self._sky_dome = {
+            "vao": vao,
+            "vbo": vbo,
+            "vertex_count": len(mesh.triangles) * 3,
+        }
+        return self._sky_dome
+
+    def _draw_skybox(
+        self,
+        scene: Scene,
+        camera: Camera,
+        view_projection: Mat4,
+    ) -> None:
+        """Fill the frame with the panorama before world geometry is drawn."""
+        skybox = scene.skybox
+        if skybox is None:
+            return
+
+        entry = self._sky_dome_entry()
+        texture = self._skybox_texture(skybox)
+
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glDepthMask(GL.GL_FALSE)
+        GL.glUseProgram(self._sky_program)
+        self._set_uniform_matrix(
+            self._sky_uniforms["u_view_projection"], view_projection
+        )
+        GL.glUniform3f(
+            self._sky_uniforms["u_center"],
+            camera.position.x, camera.position.y, camera.position.z,
+        )
+        GL.glUniform1f(self._sky_uniforms["u_radius"], SKYBOX_RADIUS)
+        GL.glUniform1f(self._sky_uniforms["u_brightness"], self.brightness)
+        GL.glUniform1f(self._sky_uniforms["u_gamma"], self.gamma)
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+        GL.glUniform1i(self._sky_uniforms["u_texture"], 0)
+        GL.glBindVertexArray(entry["vao"])
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, entry["vertex_count"])
+        GL.glBindVertexArray(0)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+        GL.glUseProgram(0)
+        GL.glDepthMask(GL.GL_TRUE)
+        GL.glEnable(GL.GL_DEPTH_TEST)
+        self.stats["draw_calls"] += 1
+
     # ------------------------------------------------------------------
     # Public rendering
     # ------------------------------------------------------------------
@@ -757,6 +978,10 @@ class GLRenderer:
         view_projection = mat4_mul(projection, view)
 
         mode = self.mode
+
+        # The sky is drawn first with depth writes disabled: it covers the
+        # clear colour without ever hiding world geometry.
+        self._draw_skybox(scene, camera, view_projection)
 
         if mode == RenderMode.WIREFRAME:
             for obj in scene.objects:

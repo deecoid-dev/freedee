@@ -1611,6 +1611,12 @@ class Engine:
             ("frame", f"{self.frame_ms:5.2f} ms"),
             ("resolution", f"{width}×{height}  {window_state}"),
             ("world", self.world_title[:40] or "main menu"),
+            (
+                "skybox",
+                self.scene.skybox.name
+                if self.scene.skybox is not None
+                else "none",
+            ),
             ("render mode", self.render_mode.value),
             (
                 "console debug",

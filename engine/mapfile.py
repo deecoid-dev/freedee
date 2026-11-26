@@ -27,6 +27,7 @@ from .materials import get_map_material
 from .math3d import Vec3
 from .mesh import Mesh
 from .scene import Object3D, Scene
+from .skybox import load_skybox_for_map
 
 MAPS_DIR = Path(__file__).resolve().parent / "maps"
 """Folder scanned by the New Game menu."""
@@ -109,6 +110,7 @@ class MapMetadata:
     colliders: int
     spawn_found: bool
     warnings: tuple[str, ...] = ()
+    skybox: str = ""
 
 
 @dataclass(frozen=True)
@@ -828,6 +830,9 @@ def load_map_into(
         raise MapError("map scale must be positive")
 
     scene.clear()
+    # A map may ship a panorama with the same file name; the skybox folder is
+    # optional, so maps without one simply keep the background colour.
+    scene.skybox = load_skybox_for_map(path)
     groups: dict[int, tuple[object, Mesh]] = {}
     warnings = list(document.warnings)
     brush_count = 0
@@ -884,6 +889,7 @@ def load_map_into(
         colliders=colliders,
         spawn_found=spawn_found,
         warnings=tuple(warnings),
+        skybox=scene.skybox.name if scene.skybox is not None else "",
     )
     print(
         f"[map] {path.name}: {metadata.brushes} brushes, "
